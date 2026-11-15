@@ -1,31 +1,39 @@
 /* SPDX-License-Identifier: Proprietary */
-/* Copyright (c) Faded Dream OS Project. All rights reserved. */
-/* Source is viewable but may not be copied, modified, or redistributed
+/* Copyright (c) Faded Dream OS Project. All rights reserved.
+   Source is viewable but may not be copied, modified, or redistributed
    without permission. */
 
 #include <console.h>
 #include <selftest.h>
 
+/* Self-test output: colourised on the framebuffer ($P/$F/$T tags are
+   stripped on serial), so PASS lines are green and FAIL lines are red
+   on real-hardware photographs. */
+
 void test_begin(struct test_ctx *t, const char *suite)
 {
     t->passed = 0;
     t->failed = 0;
-    kprintf("selftest: %s\n", suite);
+    kprintf("$Iselftest:$T %s\n", suite);
 }
 
 void test_check(struct test_ctx *t, const char *name, int cond)
 {
     if (cond) {
         t->passed++;
-        kprintf("  PASS %s\n", name);
+        kprintf("  $PPASS$T %s\n", name);
     } else {
         t->failed++;
-        kprintf("  FAIL %s\n", name);
+        kprintf("  $FFAIL$T %s\n", name);
     }
 }
 
 void test_summary(struct test_ctx *t)
 {
-    kprintf("selftest: %lu passed, %lu failed -> %s\n",
-            t->passed, t->failed, t->failed ? "FAIL" : "ALL PASS");
+    if (t->failed)
+        kprintf("$Fselftest: %lu passed, %lu failed -> FAIL$T\n",
+                t->passed, t->failed);
+    else
+        kprintf("$Pselftest: %lu passed, %lu failed -> ALL PASS$T\n",
+                t->passed, t->failed);
 }

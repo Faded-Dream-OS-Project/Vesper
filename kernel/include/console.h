@@ -29,6 +29,19 @@ void serial_putc(char c);
 void fb_putc(char c);
 void kputchar(char c);        /* writes to serial AND framebuffer */
 
+/* Console colours (fb.c + console.c + panic.c). */
+enum fb_color {
+    FB_COLOR_TEXT = 0,   /* default light grey */
+    FB_COLOR_PASS,       /* green  - self-test PASS lines */
+    FB_COLOR_FAIL,       /* red    - self-test FAIL lines + panics */
+    FB_COLOR_INFO,       /* cyan   - diagnostics section headers */
+    FB_COLOR_WARN,       /* amber  - degraded / unusual conditions */
+    FB_COLOR_PANIC,      /* bright red - panic banner */
+};
+
+void fb_set_color(u32 color);
+u32  fb_get_color(void);
+
 /* Minimal printf-style formatting (subset: %s %c %d %u %x %p %% and
    width/zero padding like %08x). */
 void kvprintf(const char *fmt, va_list args)

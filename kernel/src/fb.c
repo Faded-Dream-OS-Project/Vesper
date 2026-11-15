@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: Proprietary */
-/* Copyright (c) Faded Dream OS Project. All rights reserved. */
-/* Source is viewable but may not be copied, modified, or redistributed
+/* Copyright (c) Faded Dream OS Project. All rights reserved.
+   Source is viewable but may not be copied, modified, or redistributed
    without permission. */
 
 #include <common.h>
@@ -9,16 +9,32 @@
 #include <limine.h>
 #include <stdbool.h>
 
-/* Framebuffer console. Only initialised when the bootloader gave us a
-   usable framebuffer; otherwise silent (serial is the fallback). */
+/* Framebuffer text console.
+
+   Design notes (docs/REAL_HARDWARE.md summarizes the user-visible
+   behaviour):
+   - Works with any Limine pixel format: bpp 15/16/24/32 and
+     pitch >= width*bpp/8. Colours are composed through the
+     red/green/blue mask size+shift the bootloader reports (defaults:
+     32bpp RGB888 positions).
+   - Pixel integer scaling (2x/3x/4x) keeps text readable on
+     high-resolution panels; scale is chosen from the panel height.
+   - Every glyph is drawn with the current foreground colour, so
+     PASS/FAIL/info lines can be colourised on the fly.
+   - Scrolling keeps the last screenful of results on screen; boot
+     never clears the console afterwards. */
 
 #define TAB_WIDTH 8
+
 #define FB_FONT_W 8
 #define FB_FONT_H 16
 
-/* 8x16 bitmap font (a compact hand-rolled subset covering ASCII
-   0x20-0x7E, i.e. 95 glyphs). Rows are 8 pixels wide, one byte per
-   row, 16 rows. */
+/* 8x16 bitmap font: hand-drawn for Vesper (Faded Dream OS Project),
+   stored as one byte per row (MSB = leftmost pixel). Origin:
+   designed from scratch for this kernel in session 2 and extended in
+   session 5; deliberately NOT derived from IBM VGA fonts or any
+   third-party glyph set, so no licence can attach to
+   it. Covers ASCII 0x20..0x7E (95 glyphs). */
 static const u8 font8x16[95][16] = {
     /* ' ' */ {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
     /* '!' */ {0,0,0,18,18,18,18,18,18,0,18,18,0,0,0,0},
@@ -117,10 +133,193 @@ static const u8 font8x16[95][16] = {
     /* '~' */ {0,0,0,0,0,0,110,219,0,0,0,0,0,0,0,0},
 };
 
+/* ---- colours (8-bit RGB components) ---- */
+
+enum {
+    RGB_TEXT  = 0x00D8D8D8u,   /* light grey */
+    RGB_BLACK = 0x00000000u,
+    RGB_PASS  = 0x0022C222u,   /* green */
+    RGB_FAIL  = 0x00E03A3Au,   /* red */
+    RGB_INFO  = 0x005AC8FAu,   /* cyan/blue */
+    RGB_WARN  = 0x00E0A030u,   /* amber */
+    RGB_PANIC = 0x00FF4040u,   /* bright red */
+};
+
 static struct limine_framebuffer *fb;
 static u32 fb_w, fb_h, fb_pitch, fb_bpp;
-static u32 cur_x, cur_y;   /* in characters */
+static u32 cur_x, cur_y;      /* in characters */
 static u32 cols, rows;
+static u32 scale = 1;         /* pixel scale (1..4) */
+static u32 fg_rgb = RGB_TEXT; /* current foreground */
+
+/* mask info (defaults = classic 32bpp RGB888) */
+static u8 r_size = 8, r_shift = 16;
+static u8 g_size = 8, g_shift = 8;
+static u8 b_size = 8, b_shift = 0;
+
+static int fb_enabled = 1;
+
+void fb_console_disable(void) { fb_enabled = 0; }
+void fb_console_enable(void)  { fb_enabled = 1; }
+
+bool fb_present(void)
+{
+    return fb != NULL;
+}
+
+/* Compose a pixel value in the framebuffer's own format from 8-bit RGB
+   components using the mask sizes/shifts the bootloader reported. */
+static u32 compose_rgb(u32 rgb)
+{
+    u32 r8 = (rgb >> 16) & 0xFF, g8 = (rgb >> 8) & 0xFF, b8 = rgb & 0xFF;
+    u32 rv, gv, bv;
+
+    /* scale 8-bit component into the mask width (left-aligned) */
+    if (r_size == 0) {
+        r_size = 8; r_shift = 16;
+        g_size = 8; g_shift = 8;
+        b_size = 8; b_shift = 0;
+    }
+    if (r_size >= 8)
+        rv = r8 >> (r_size - 8);
+    else
+        rv = r8 >> (8 - r_size);   /* truncate (approximate) */
+    if (g_size >= 8)
+        gv = g8 >> (g_size - 8);
+    else
+        gv = g8 >> (8 - g_size);
+    if (b_size >= 8)
+        bv = b8 >> (b_size - 8);
+    else
+        bv = b8 >> (8 - b_size);
+
+    return (rv << r_shift) | (gv << g_shift) | (bv << b_shift);
+}
+
+/* Raw pixel writer for the active format. bpp is trusted to be one of
+   15/16/24/32 (Limine guarantees a supported mode); anything else
+   falls back to 32bpp-like behaviour safely (writes within pitch). */
+static void putpixel_rgb(u32 x, u32 y, u32 rgb)
+{
+    size_t off = (size_t)y * fb_pitch + (size_t)x * (fb_bpp / 8);
+    u8 *p = (u8 *)fb->address + off;
+    u32 v = compose_rgb(rgb);
+
+    switch (fb_bpp) {
+    case 32:
+        *(u32 *)p = v;
+        break;
+    case 24:
+        p[0] = (u8)(v & 0xFF);
+        p[1] = (u8)((v >> 8) & 0xFF);
+        p[2] = (u8)((v >> 16) & 0xFF);
+        break;
+    case 16:
+        *(u16 *)p = (u16)v;
+        break;
+    case 15:
+        /* RGB555: recompose 5-5-5 from the 8-bit components */
+        {
+            u32 r8 = (rgb >> 16) & 0xFF, g8 = (rgb >> 8) & 0xFF,
+                b8 = rgb & 0xFF;
+            *(u16 *)p = (u16)(((r8 >> 3) << 10) | ((g8 >> 3) << 5) |
+                              (b8 >> 3));
+        }
+        break;
+    default:
+        *(u32 *)p = v;
+        break;
+    }
+}
+
+static void putpixel_black(u32 x, u32 y)
+{
+    size_t off = (size_t)y * fb_pitch + (size_t)x * (fb_bpp / 8);
+    u8 *p = (u8 *)fb->address + off;
+
+    switch (fb_bpp) {
+    case 32:
+        *(u32 *)p = 0;
+        break;
+    case 24:
+        p[0] = 0; p[1] = 0; p[2] = 0;
+        break;
+    case 16:
+    case 15:
+        *(u16 *)p = 0;
+        break;
+    default:
+        *(u32 *)p = 0;
+        break;
+    }
+}
+
+/* Draw one glyph cell (cursor position in characters) with the given
+   foreground colour, honouring the pixel scale. */
+static void fb_draw_char(u32 cx, u32 cy, char ch, u32 rgb)
+{
+    if (ch < 0x20 || ch > 0x7E)
+        ch = '?';
+
+    const u8 *glyph = font8x16[ch - 0x20];
+    u32 bx = cx * FB_FONT_W * scale;
+    u32 by = cy * FB_FONT_H * scale;
+
+    for (u32 r = 0; r < FB_FONT_H; r++) {
+        u8 bits = glyph[r];
+        for (u32 c = 0; c < FB_FONT_W; c++) {
+            u32 on = (bits & (0x80u >> c)) != 0;
+            if (scale == 1) {
+                if (on)
+                    putpixel_rgb(bx + c, by + r, rgb);
+                else
+                    putpixel_black(bx + c, by + r);
+            } else {
+                for (u32 sy = 0; sy < scale; sy++) {
+                    for (u32 sx = 0; sx < scale; sx++) {
+                        u32 x = bx + c * scale + sx;
+                        u32 y = by + r * scale + sy;
+                        if (on)
+                            putpixel_rgb(x, y, rgb);
+                        else
+                            putpixel_black(x, y);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* Hardware cursor: invert a thin bar under the cursor cell. */
+static void fb_cursor_on(void)
+{
+    u32 bx = cur_x * FB_FONT_W * scale;
+    u32 by = cur_y * FB_FONT_H * scale;
+    u32 bar_h = 2 * scale;
+    u32 bar_y = by + FB_FONT_H * scale - bar_h;
+
+    for (u32 r = 0; r < bar_h; r++) {
+        for (u32 c = 0; c < FB_FONT_W * scale; c++) {
+            u32 x = bx + c, y = bar_y + r;
+            if (x < fb_w && y < fb_h)
+                putpixel_rgb(x, y, RGB_TEXT);
+        }
+    }
+}
+
+static void fb_scroll_1(void)
+{
+    if (!fb)
+        return;
+    u8 *base = (u8 *)fb->address;
+    size_t row_bytes = (size_t)fb_pitch * FB_FONT_H * scale;
+
+    if (row_bytes >= (size_t)fb_pitch * fb_h)
+        return;   /* single text row: nothing to scroll */
+    memmove(base, base + row_bytes,
+            (size_t)fb_pitch * fb_h - row_bytes);
+    memset(base + (size_t)fb_pitch * fb_h - row_bytes, 0, row_bytes);
+}
 
 void fb_init(struct limine_framebuffer *framebuffer)
 {
@@ -131,16 +330,38 @@ void fb_init(struct limine_framebuffer *framebuffer)
     fb_h = framebuffer->height;
     fb_pitch = framebuffer->pitch;
     fb_bpp = framebuffer->bpp;
-    cols = fb_w / FB_FONT_W;
-    rows = fb_h / FB_FONT_H;
+
+    if (fb_bpp != 15 && fb_bpp != 16 && fb_bpp != 24 && fb_bpp != 32)
+        return;   /* unsupported format: stay serial-only */
+    if (fb_pitch < (u32)(fb_w * (fb_bpp / 8)))
+        fb_pitch = fb_w * (fb_bpp / 8);   /* defensive */
+
+    /* Pixel scale so text stays readable on big panels: aim for at
+       least ~28 text rows; 1080p+ gets 2x, 4K gets 3-4x. */
+    scale = 1;
+    while (scale < 4 &&
+           fb_h / (FB_FONT_H * (scale + 1)) >= 30 &&
+           fb_w / (FB_FONT_W * (scale + 1)) >= 60)
+        scale++;
+
+    cols = fb_w / (FB_FONT_W * scale);
+    rows = fb_h / (FB_FONT_H * scale);
     cur_x = 0;
     cur_y = 0;
-    fb_clear();
-}
+    fg_rgb = RGB_TEXT;
 
-bool fb_present(void)
-{
-    return fb != NULL;
+    /* Use the bootloader's mask layout when it reports one. */
+    if (framebuffer->red_mask_size + framebuffer->green_mask_size +
+        framebuffer->blue_mask_size > 0) {
+        r_size = framebuffer->red_mask_size;
+        r_shift = framebuffer->red_mask_shift;
+        g_size = framebuffer->green_mask_size;
+        g_shift = framebuffer->green_mask_shift;
+        b_size = framebuffer->blue_mask_size;
+        b_shift = framebuffer->blue_mask_shift;
+    }
+
+    fb_clear();
 }
 
 void fb_clear(void)
@@ -155,64 +376,33 @@ void fb_clear(void)
     cur_y = 0;
 }
 
-static void fb_scroll_1(void)
-{
-    if (!fb)
-        return;
-    u8 *base = (u8 *)fb->address;
-    size_t row_bytes = (size_t)fb_pitch * FB_FONT_H;
+/* ---- colour escape API ---- */
 
-    memmove(base, base + row_bytes, (size_t)fb_pitch * (fb_h - FB_FONT_H));
-    memset(base + (size_t)fb_pitch * (fb_h - FB_FONT_H), 0, row_bytes);
-}
-
-static void fb_putpixel(u32 x, u32 y, bool on)
+void fb_set_color(u32 color)
 {
-    u8 *p = (u8 *)fb->address + (size_t)y * fb_pitch + x * (fb_bpp / 8);
-    if (fb_bpp == 32) {
-        u32 *px = (u32 *)p;
-        *px = on ? 0x00E8E8E8u : 0x00000000u;
-    } else if (fb_bpp == 24) {
-        if (on) {
-            p[0] = 0xE8; p[1] = 0xE8; p[2] = 0xE8;
-        } else {
-            p[0] = 0; p[1] = 0; p[2] = 0;
-        }
+    switch (color) {
+    case FB_COLOR_PASS:  fg_rgb = RGB_PASS;  break;
+    case FB_COLOR_FAIL:  fg_rgb = RGB_FAIL;  break;
+    case FB_COLOR_INFO:  fg_rgb = RGB_INFO;  break;
+    case FB_COLOR_WARN:  fg_rgb = RGB_WARN;  break;
+    case FB_COLOR_PANIC: fg_rgb = RGB_PANIC; break;
+    default:             fg_rgb = RGB_TEXT;  break;
     }
 }
 
-static void fb_draw_char(u32 cx, u32 cy, char ch)
+u32 fb_get_color(void)
 {
-    const u8 *glyph;
-    u32 bx = cx * FB_FONT_W;
-    u32 by = cy * FB_FONT_H;
-
-    if (ch < 0x20 || ch > 0x7E)
-        ch = '?';
-    glyph = font8x16[ch - 0x20];    for (u32 r = 0; r < FB_FONT_H; r++) {
-        u8 bits = glyph[r];
-        for (u32 c = 0; c < FB_FONT_W; c++)
-            fb_putpixel(bx + c, by + r, (bits & (0x80u >> c)) != 0);
-    }
-}
-
-static int fb_enabled = 1;
-
-void fb_console_disable(void)
-{
-    fb_enabled = 0;
-}
-
-void fb_console_enable(void)
-{
-    fb_enabled = 1;
+    if (fg_rgb == RGB_PASS)  return FB_COLOR_PASS;
+    if (fg_rgb == RGB_FAIL)  return FB_COLOR_FAIL;
+    if (fg_rgb == RGB_INFO)  return FB_COLOR_INFO;
+    if (fg_rgb == RGB_WARN)  return FB_COLOR_WARN;
+    if (fg_rgb == RGB_PANIC) return FB_COLOR_PANIC;
+    return FB_COLOR_TEXT;
 }
 
 void fb_putc(char c)
 {
-    if (!fb_enabled)
-        return;
-    if (!fb)
+    if (!fb_enabled || !fb)
         return;
 
     if (c == '\n') {
@@ -222,11 +412,15 @@ void fb_putc(char c)
         cur_x = 0;
     } else if (c == '\t') {
         cur_x = (cur_x / TAB_WIDTH + 1) * TAB_WIDTH;
+        if (cur_x >= cols) {
+            cur_x = 0;
+            cur_y++;
+        }
     } else if (c == '\b') {
         if (cur_x > 0)
             cur_x--;
     } else {
-        fb_draw_char(cur_x, cur_y, c);
+        fb_draw_char(cur_x, cur_y, c, fg_rgb);
         cur_x++;
     }
 
@@ -238,4 +432,7 @@ void fb_putc(char c)
         fb_scroll_1();
         cur_y = rows - 1;
     }
+
+    if (cur_x < cols && cur_y < rows)
+        fb_cursor_on();   /* solid bar under the next cell */
 }

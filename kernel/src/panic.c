@@ -1,13 +1,16 @@
 /* SPDX-License-Identifier: Proprietary */
-/* Copyright (c) Faded Dream OS Project. All rights reserved. */
-/* Source is viewable but may not be copied, modified, or redistributed
+/* Copyright (c) Faded Dream OS Project. All rights reserved.
+   Source is viewable but may not be copied, modified, or redistributed
    without permission. */
 
 #include <common.h>
 #include <console.h>
 #include <lib.h>
 
-/* panic: print the message, dump the caller's RIP, halt forever. */
+/* panic: render the banner and register dump ON SCREEN in a distinct
+   colour (plus serial when present), unwind the stack, then halt with
+   cli;hlt forever. The screen keeps the panic visible for
+   photographing (docs/REAL_HARDWARE.md). */
 
 struct link_reg {
     struct link_reg *rbp;
@@ -33,7 +36,7 @@ void panic(const char *fmt, ...)
 
     __asm__ volatile ("mov 8(%%rbp), %0" : "=r"(rip));
 
-    kprintf("\nKERNEL PANIC: ");
+    kprintf("\n$R*** KERNEL PANIC ***$T\n");
     va_start(args, fmt);
     kvprintf(fmt, args);
     va_end(args);
@@ -41,7 +44,7 @@ void panic(const char *fmt, ...)
 
     kprintf("RIP=%#lx\n", rip);
     unwind_stack();
-    kprintf("system halted.\n");
+    kprintf("$Rsystem halted.$T\n");
 
     cli();
     for (;;)

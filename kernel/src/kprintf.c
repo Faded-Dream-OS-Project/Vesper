@@ -10,7 +10,26 @@
 /* Minimal kprintf: %s %c %d %i %u %x %p %% with 'l'/'z' length
    modifiers, '#' (0x prefix), zero padding and field width
    (e.g. %08x, %#lx). Output goes to BOTH the serial line and the
-   framebuffer (whichever exists). */
+   framebuffer (whichever exists).
+
+   Colour tags (framebuffer only, stripped from serial output):
+     $P = PASS green    $F = FAIL red
+     $I = INFO cyan     $W = WARN amber
+     $R = PANIC red     $T = back to default text colour
+   They may appear anywhere in the format string. */
+
+static void apply_tag(char t)
+{
+    switch (t) {
+    case 'P': fb_set_color(FB_COLOR_PASS); break;
+    case 'F': fb_set_color(FB_COLOR_FAIL); break;
+    case 'I': fb_set_color(FB_COLOR_INFO); break;
+    case 'W': fb_set_color(FB_COLOR_WARN); break;
+    case 'R': fb_set_color(FB_COLOR_PANIC); break;
+    case 'T': fb_set_color(FB_COLOR_TEXT); break;
+    default: break;
+    }
+}
 
 static void pad_zeroes(int count)
 {
@@ -31,6 +50,12 @@ void kvprintf(const char *fmt, va_list args)
     char buf[72];
 
     for (; *fmt; fmt++) {
+        if (*fmt == '$' && fmt[1] != '\0') {
+            /* colour tag: framebuffer only */
+            apply_tag(fmt[1]);
+            fmt++;
+            continue;
+        }
         if (*fmt != '%') {
             kputchar(*fmt);
             continue;
