@@ -33,9 +33,12 @@ ISO     := vesper.iso
 IMG     := vesper.img
 
 KERNEL_SRCS := $(wildcard kernel/src/*.c)
-ASM_SRCS    := kernel/src/isr_stubs.S kernel/src/gdt_flush.S kernel/src/sched_switch_to.S
+ASM_SRCS    := kernel/src/isr_stubs.S kernel/src/gdt_flush.S \
+               kernel/src/sched_switch_to.S kernel/src/syscall_entry.S \
+               kernel/src/init_blob.S
 KERNEL_OBJS := $(patsubst kernel/src/%.c,build/%.o,$(KERNEL_SRCS)) \
-               build/isr_stubs.o build/gdt_flush.o build/sched_switch_to.o
+               build/isr_stubs.o build/gdt_flush.o build/sched_switch_to.o \
+               build/syscall_entry.o build/init_blob.o
 
 CFLAGS := -std=c17 -Wall -Wextra -ffreestanding -nostdlib \
           -fno-stack-protector -fno-pic -fno-pie -mno-red-zone \
@@ -61,6 +64,17 @@ build/gdt_flush.o: kernel/src/gdt_flush.S | build
 
 build/sched_switch_to.o: kernel/src/sched_switch_to.S | build
 	$(CC) $(CFLAGS) -c $< -o $@
+
+build/syscall_entry.o: kernel/src/syscall_entry.S | build
+	$(CC) $(CFLAGS) -c $< -o $@
+
+build/init_blob.o: kernel/src/init_blob.S build/init.bin | build
+	$(CC) $(CFLAGS) -c $< -o $@
+
+build/init.bin: user/init.c scripts/build_init.sh | build
+	bash scripts/build_init.sh
+
+.PHONY: init
 
 kernel/src/isr_stubs.S: scripts/gen_isr_stubs.py
 	python3 scripts/gen_isr_stubs.py $@

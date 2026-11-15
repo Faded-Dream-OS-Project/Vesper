@@ -18,6 +18,7 @@
 #include <sched.h>
 #include <selftest.h>
 #include <timer.h>
+#include <usermode.h>
 #include <vmm.h>
 #include <heap.h>
 
@@ -466,6 +467,47 @@ void kmain(void)
         test_check(&t, "no starvation (all reached target)",
                    m5_counts[0] >= 2500000 && m5_counts[1] >= 2500000 &&
                    m5_counts[2] >= 2500000);
+        test_summary(&t);
+    }
+
+    /* ---- Milestone 6: syscalls + user mode + init ---- */
+    usermode_init();
+    kprintf("syscalls: syscall/sysret enabled (write exit yield getpid uptime_ms)\n");
+    {
+        struct test_ctx t;
+
+        test_begin(&t, "user");
+        kprintf("user: launching init in ring 3...\n");
+        usermode_launch_init();
+
+        /* Wait for the init task to finish (exit or fault-kill); the
+           scheduler round-robins us with it. */
+        u64 deadline = timer_ticks() + 20 * TIMER_HZ;
+        while (sched_task_count() > 1 && timer_ticks() < deadline)
+            __asm__ volatile ("pause");
+
+        kprintf("user: init finished, tasks=%lu, ticks=%lu\n",
+                (unsigned long)sched_task_count(),
+                (unsigned long)timer_ticks());
+        test_check(&t, "init ran in ring 3 and exited",
+                   sched_task_count() == 1);
+
+        /* Second user program: deliberately executes hlt in ring 3.
+           It must be killed; the kernel must keep running. */
+        u64 ticks_before = timer_ticks();
+        usermode_launch_fault_init();
+        deadline = timer_ticks() + 20 * TIMER_HZ;
+        while (sched_task_count() > 1 && timer_ticks() < deadline)
+            __asm__ volatile ("pause");
+        u64 ticks_after = timer_ticks();
+
+        kprintf("user: fault_init finished (killed), tasks=%lu\n",
+                (unsigned long)sched_task_count());
+        test_check(&t, "privileged instruction killed only the process",
+                   sched_task_count() == 1);
+        test_check(&t, "kernel kept ticking after the fault",
+                   ticks_after > ticks_before);
+
         test_summary(&t);
     }
 

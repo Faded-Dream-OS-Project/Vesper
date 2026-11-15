@@ -9,13 +9,17 @@
 #include <lib.h>
 #include <sched.h>
 #include <vmm.h>
+#include <pmm.h>
 
 /* Round-robin scheduler.
 
    A new task's stack is crafted so the FIRST sched_switch_to onto it
    pops into sched_trampoline -> fn(arg) -> kthread_exit. The idle
    task (task 0) is the kernel's main path: everything else runs by
-   switching away from it on each tick. */
+   switching away from it on each tick.
+
+   Every switch also swaps CR3: user runners own their address space,
+   kernel threads return to the kernel PML4. */
 
 void sched_switch_to(struct task *prev, struct task *next);
 
@@ -24,6 +28,7 @@ void sched_switch_to(struct task *prev, struct task *next);
 static struct task tasks[MAX_TASKS];
 static struct task *current;
 static u64 ready_count;   /* tasks alive (incl. idle) */
+static u64 next_pid = 1;
 
 /* Trampoline for new threads: runs fn(arg), then exits. */
 static void sched_trampoline(void)
@@ -43,7 +48,10 @@ void sched_init(void)
     ready_count = 1;
 }
 
-int kthread_create(const char *name, kthread_fn_t fn, void *arg)
+/* Allocate and fully initialise a task WITHOUT making it schedulable
+   (used by task_new_user, which must finish mapping the address space
+   before the runner can ever run). */
+static int task_alloc(const char *name, kthread_fn_t fn, void *arg)
 {
     int slot = -1;
     for (int i = 0; i < MAX_TASKS; i++) {
@@ -78,6 +86,12 @@ int kthread_create(const char *name, kthread_fn_t fn, void *arg)
     t->arg = arg;
     t->state = TASK_READY;
     t->counter = 0;
+    t->pml4 = 0;
+    t->user_rip = 0;
+    t->user_rsp = 0;
+    t->user_rsp_top = 0;
+    t->exit_code = 0;
+    t->pid = sched_assign_pid();
     if (name) {
         strncpy(t->name, name, KTHREAD_NAME_LEN - 1);
         t->name[KTHREAD_NAME_LEN - 1] = 0;
@@ -94,9 +108,108 @@ int kthread_create(const char *name, kthread_fn_t fn, void *arg)
     *(--top) = 0;                       /* r14 */
     *(--top) = 0;                       /* r15 */
     t->rsp = (u64)top;
+    return slot;
+}
 
+int kthread_create(const char *name, kthread_fn_t fn, void *arg)
+{
+    int slot = task_alloc(name, fn, arg);
+    if (slot < 0)
+        return -1;
+    tasks[slot].state = TASK_READY;
     ready_count++;
     return slot;
+}
+
+/* Map extra zero-filled user pages into an existing user task
+   (used for .bss beyond the file-backed blob). */
+int task_add_user_pages(int slot, u64 vaddr, u64 pages)
+{
+    if (slot < 0 || slot >= MAX_TASKS)
+        return -1;
+    struct task *t = &tasks[slot];
+    if (!t->pml4)
+        return -1;
+    for (u64 i = 0; i < pages; i++) {
+        u64 p = pmm_alloc();
+        if (p == 0)
+            return -1;
+        if (vmm_map_table(t->pml4, vaddr + i * VMM_PAGE_SIZE,
+                          p, VMM_WRITABLE | VMM_USER) != 0)
+            return -1;
+    }
+    return 0;
+}
+
+/* Create a USER (ring 3) task.
+   - code: physical pages mapped at USER_CODE_BASE, R+X, U bit
+   - data: physical pages mapped at USER_DATA_BASE, R+W, U bit
+   - stack: fresh pages at USER_STACK_TOP - n, R+W, U bit
+   The kernel-side runner thread enters ring 3 via syscall_return. */
+#define USER_CODE_BASE  0x400000ull          /* 4 MiB */
+#define USER_STACK_TOP  0x800000000000ull     /* user half top-16K */
+#define USER_STACK_SIZE (64 * 1024)
+#define USER_STACK_BASE (USER_STACK_TOP - USER_STACK_SIZE)
+
+int task_new_user(const char *name, u64 entry, u64 user_rsp,
+                  const u64 *code_frames, u64 code_pages)
+{
+    /* 1) a kernel runner thread (it owns a kernel stack + guard page
+       and starts the user code via a dedicated entry function). The
+       task stays unschedulable until its address space is complete —
+       a premature switch once loaded CR3=0 and double-faulted. */
+    int slot = task_alloc(name, task_enter_user, 0);
+    if (slot < 0)
+        return -1;
+    struct task *t = &tasks[slot];
+
+    t->user_rip = entry;
+    t->user_rsp = user_rsp ? user_rsp : USER_STACK_TOP - 136;
+    t->user_rsp_top = t->rsp;   /* TSS.rsp0 switch target */
+
+    /* 2) its own address space */
+    t->pml4 = vmm_create_user_pml4();
+    if (t->pml4 == 0)
+        return -1;
+
+    /* 3) code pages (r+x, user) — frames are SCATTERED: map each
+       one individually (mapping code_phys+i*4096 once spliced
+       unrelated physical memory into user space and execution
+       degenerated into zero-op garbage -> non-canonical #GP). */
+    for (u64 i = 0; i < code_pages; i++) {
+        if (vmm_map_table(t->pml4, USER_CODE_BASE + i * VMM_PAGE_SIZE,
+                          code_frames[i],
+                          VMM_WRITABLE | VMM_USER) != 0)
+            return -1;
+    }
+
+    /* 4) stack pages (rw, user), fresh zero frames */
+    u64 spages = USER_STACK_SIZE / VMM_PAGE_SIZE;
+    for (u64 i = 0; i < spages; i++) {
+        u64 p = pmm_alloc();
+        if (p == 0)
+            return -1;
+        if (vmm_map_table(t->pml4, USER_STACK_BASE + i * VMM_PAGE_SIZE,
+                          p, VMM_WRITABLE | VMM_USER) != 0)
+            return -1;
+    }
+
+    /* fully initialised: make it schedulable */
+    t->state = TASK_READY;
+    ready_count++;
+    return slot;
+}
+
+u64 sched_assign_pid(void)
+{
+    return next_pid++;
+}
+
+/* Mark the current task finished and drop it from the ready count
+   (used by user_fault_kill; kthread_exit does the same inline). */
+void sched_task_release(void)
+{
+    ready_count--;
 }
 
 void kthread_exit(void)
@@ -140,6 +253,17 @@ static void switch_to(struct task *next)
     current = next;
     prev->state = (prev->state == TASK_RUNNING) ? TASK_READY : prev->state;
     next->state = TASK_RUNNING;
+
+    /* Address spaces are per task: kernel threads use the kernel
+       PML4, user runners their own. This must happen BEFORE the stack
+       switch so the next task's first instruction fetch uses the
+       right tables (a missing switch here faulted init at its very
+       first instruction). */
+    if (next->pml4)
+        vmm_load_pml4(next->pml4);
+    else
+        vmm_load_pml4(vmm_kernel_pml4());
+
     sched_switch_to(prev, next);
 }
 

@@ -8,6 +8,7 @@
 #include <isr.h>
 #include <lib.h>
 #include <sched.h>
+#include <usermode.h>
 
 /* Exception dispatch and register dump. */
 
@@ -32,6 +33,15 @@ const char *exception_name(u64 n)
 
 void exception_handler(struct int_frame *frame)
 {
+    /* Ring-3 fault: kill that process, keep the kernel running. */
+    if ((frame->cs & 3) == 3 && frame->int_no != 3) {
+        kprintf("user: fault #%lu (%s) at RIP %#lx\n",
+                frame->int_no, exception_name(frame->int_no), frame->rip);
+        if (frame->int_no == 14)
+            kprintf("user: fault address %#lx\n", read_cr2());
+        user_fault_kill("user-mode exception");
+    }
+
     kprintf("\n=== EXCEPTION #%lu (%s) ===\n",
             frame->int_no, exception_name(frame->int_no));
     if (frame->int_no == 14)
@@ -51,6 +61,14 @@ void exception_handler(struct int_frame *frame)
     kprintf("RIP=%#016lx CS=%#lx RFLAGS=%#lx SS=%#lx\n",
             frame->rip, frame->cs, frame->rflags, frame->ss);
     kprintf("ERCODE=%#lx\n", frame->errcode);
+    /* raw iretq frame at RSP: [rip][cs][rflags][rsp][ss] */
+    {
+        volatile u64 *f = (volatile u64 *)frame->rsp;
+        kprintf("iret frame: rip=%#lx cs=%#lx rfl=%#lx rsp=%#lx ss=%#lx\n",
+                (unsigned long)f[0], (unsigned long)f[1],
+                (unsigned long)f[2], (unsigned long)f[3],
+                (unsigned long)f[4]);
+    }
 
     panic("exception %lu at RIP %#lx", frame->int_no, frame->rip);
 }

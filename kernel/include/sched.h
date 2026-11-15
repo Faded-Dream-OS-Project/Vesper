@@ -26,13 +26,27 @@ struct task {
     int state;
     u64 counter;             /* test-visible progress counter */
     struct task *next;
+
+    /* ring-3 (user) state */
+    u64 pml4;                /* user PML4 (physical), 0 = kernel task */
+    u64 user_rip;            /* entry RIP (0 = kernel thread) */
+    u64 user_rsp;            /* initial user RSP */
+    u64 user_rsp_top;        /* kernel stack switch target (TSS.rsp0) */
+    u64 exit_code;
+    u64 pid;
 };
 
 enum { TASK_UNUSED = 0, TASK_READY, TASK_RUNNING, TASK_FINISHED };
 
 void sched_init(void);
 int  kthread_create(const char *name, kthread_fn_t fn, void *arg);
+int  task_new_user(const char *name, u64 entry, u64 user_rsp,
+                   const u64 *code_frames, u64 code_pages);
 void kthread_exit(void);     /* marks current task finished, yields */
+u64  sched_assign_pid(void);
+void sched_task_release(void);
+int  task_add_user_pages(int slot, u64 vaddr, u64 pages);
+void task_enter_user(void *arg);   /* ring-3 launcher (usermode.c) */
 void sched_yield(void);      /* cooperative switch */
 void sched_tick(void);       /* timer IRQ preempts (after EOI) */
 struct task *sched_current(void);

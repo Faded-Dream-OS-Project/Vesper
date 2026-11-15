@@ -64,6 +64,13 @@ struct gdtr {
    segment selectors, then ltr. */
 void gdt_flush(u64 gdtr_addr, u16 tr_selector);
 
+/* TSS.rsp0 — the ring-0 stack for interrupts/syscalls while a user
+   task is in ring 3. */
+void gdt_set_rsp0(u64 rsp)
+{
+    tss.rsp0 = rsp;
+}
+
 void gdt_init(void)
 {
     memset(&tss, 0, sizeof(tss));

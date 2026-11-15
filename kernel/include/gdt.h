@@ -23,5 +23,6 @@
 #define SEL_TSS       0x38
 
 void gdt_init(void);
+void gdt_set_rsp0(u64 rsp);   /* TSS.rsp0 for the current user task */
 
 #endif /* VESPER_GDT_H */

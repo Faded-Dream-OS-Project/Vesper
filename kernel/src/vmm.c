@@ -15,6 +15,7 @@
 static u64 hhdm;
 static u64 kernel_virt_base;
 static u64 kernel_phys_base;
+static u64 kernel_pml4;   /* the kernel's own PML4 (physical) */
 
 /* Physical -> HHDM virtual address translation. */
 static inline u64 phys_to_virt(u64 p)
@@ -43,12 +44,14 @@ static u64 alloc_table(void)
     return p;
 }
 
-/* Walk the hierarchy, creating intermediate levels as requested. */
-static u64 *walk(u64 pml4_phys, u64 virt, int create)
+/* Walk the hierarchy, creating intermediate levels as requested.
+   user=1: created intermediate entries carry VMM_USER. */
+static u64 *walk_gen(u64 pml4_phys, u64 virt, int create, int user)
 {
     u64 idx = (virt >> 39) & 0x1FF;
     u64 *e = pml_entry(pml4_phys, idx);
 
+    u64 uflag = user ? VMM_USER : 0;
     u64 pdpt;
     if (*e & VMM_PRESENT) {
         pdpt = *e & 0x000FFFFFFFFFF000ull;
@@ -58,7 +61,7 @@ static u64 *walk(u64 pml4_phys, u64 virt, int create)
         pdpt = alloc_table();
         if (pdpt == 0)
             return NULL;
-        *e = pdpt | VMM_PRESENT | VMM_WRITABLE;
+        *e = pdpt | VMM_PRESENT | VMM_WRITABLE | uflag;
     }
 
     idx = (virt >> 30) & 0x1FF;
@@ -72,7 +75,7 @@ static u64 *walk(u64 pml4_phys, u64 virt, int create)
         pd = alloc_table();
         if (pd == 0)
             return NULL;
-        *e = pd | VMM_PRESENT | VMM_WRITABLE;
+        *e = pd | VMM_PRESENT | VMM_WRITABLE | uflag;
     }
 
     idx = (virt >> 21) & 0x1FF;
@@ -86,10 +89,20 @@ static u64 *walk(u64 pml4_phys, u64 virt, int create)
         pt = alloc_table();
         if (pt == 0)
             return NULL;
-        *e = pt | VMM_PRESENT | VMM_WRITABLE;
+        *e = pt | VMM_PRESENT | VMM_WRITABLE | uflag;
     }
 
     return pml_entry(pt, (virt >> 12) & 0x1FF);
+}
+
+static u64 *walk(u64 pml4_phys, u64 virt, int create)
+{
+    return walk_gen(pml4_phys, virt, create, 0);
+}
+
+static u64 *walk_user(u64 pml4_phys, u64 virt, int create)
+{
+    return walk_gen(pml4_phys, virt, create, 1);
 }
 
 void vmm_init(u64 hhdm_offset, struct limine_executable_address_response *ea)
@@ -135,7 +148,57 @@ void vmm_init(u64 hhdm_offset, struct limine_executable_address_response *ea)
     (void)e;
 
     /* Switch to our tables. */
+    kernel_pml4 = pml4;
     write_cr3(pml4);
+}
+
+u64 vmm_kernel_pml4(void)
+{
+    return kernel_pml4;
+}
+
+void vmm_load_pml4(u64 pml4)
+{
+    write_cr3(pml4);
+}
+
+/* Map a page into an EXPLICIT PML4 (not CR3): used for per-process
+   user address spaces. Flags as vmm_map.
+
+   Intermediate page tables created during the walk MUST carry the
+   USER bit too — ring 3 cannot traverse supervisor-only entries, and
+   a missing USER bit on the PDPT/PD/PT silently faults the user task
+   at its first instruction. */
+int vmm_map_table(u64 pml4_phys, u64 virt, u64 phys, u64 flags)
+{
+    u64 *e = walk_user(pml4_phys, virt, 1);
+    if (!e)
+        return -1;
+    if (*e & VMM_PRESENT)
+        return -1;                       /* already mapped */
+    *e = (phys & 0x000FFFFFFFFFF000ull) | VMM_PRESENT | flags;
+    return 0;
+}
+
+/* Build a fresh PML4 sharing the kernel half (entries 256..511
+   copied from the kernel PML4) with an empty user half: the base of
+   every user process address space. Returns the PML4 physical
+   address, 0 on failure. */
+u64 vmm_create_user_pml4(void)
+{
+    u64 pml4 = alloc_table();
+    if (pml4 == 0)
+        return 0;
+    /* The kernel-half copy must be atomic: a timer preempting the
+       loop mid-copy once left a half-populated PML4 that faulted on
+       the very next kernel instruction fetch after CR3 loaded it. */
+    cli();
+    u64 *src = (u64 *)phys_to_virt(kernel_pml4);
+    u64 *dst = (u64 *)phys_to_virt(pml4);
+    for (int i = 256; i < 512; i++)
+        dst[i] = src[i];
+    sti();
+    return pml4;
 }
 
 u64 vmm_phys_to_hhdm(u64 paddr)

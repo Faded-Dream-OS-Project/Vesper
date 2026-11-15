@@ -36,6 +36,10 @@ void vmm_init(u64 hhdm_offset, struct limine_executable_address_response *ea);
 /* Physical address -> HHDM virtual address (bootloader-provided map). */
 u64 vmm_phys_to_hhdm(u64 paddr);
 int  vmm_map(u64 virt, u64 phys, u64 flags);   /* 0 = ok, -1 = error */
+int  vmm_map_table(u64 pml4_phys, u64 virt, u64 phys, u64 flags);
+u64  vmm_kernel_pml4(void);
+void vmm_load_pml4(u64 pml4);
+u64  vmm_create_user_pml4(void);
 int  vmm_unmap(u64 virt);                      /* 0 = ok, -1 = not mapped */
 int  vmm_mapped(u64 virt, u64 *phys_out);      /* 0 = mapped */
 

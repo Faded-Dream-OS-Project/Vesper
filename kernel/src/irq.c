@@ -17,6 +17,8 @@
 
 static irq_handler_t handlers[256];
 static u64 dispatched;
+static u8 irq_depth;   /* interrupt nesting level (IF stays on inside
+                          handlers, so nesting is possible) */
 
 int irq_install(u8 vector, irq_handler_t fn)
 {
@@ -32,12 +34,9 @@ void timer_irq(struct int_frame *frame)
     (void)frame;
     timer_tick();
     /* EOI FIRST: the timer vector leaves service so the next tick can
-       reach whichever task runs next; the generic end-of-dispatch EOI
-       in irq_dispatch would only fire on the interrupted task's own
-       return path — far too late (that was half of the preemption
-       livelock). */
+       reach whichever task runs next. Preemption itself moved to the
+       outermost-dispatch tail in irq_dispatch (nested-safe). */
     apic_eoi();
-    sched_tick();
 }
 
 /* PS/2 keyboard entry point (vector 0x21). */
@@ -56,6 +55,7 @@ void irq_dispatch(struct int_frame *frame)
 {
     u64 n = frame->int_no;
     dispatched++;
+    irq_depth++;
 
     if (n < 256 && handlers[n]) {
         handlers[n](frame);
@@ -70,4 +70,14 @@ void irq_dispatch(struct int_frame *frame)
     }
 
     apic_eoi();
+    irq_depth--;
+
+    /* Preempt ONLY at the outermost level: switching tasks inside a
+       NESTED interrupt abandons inner frames across tasks and has
+       corrupted iretq state (observed as #GP e=0x20 popping a garbage
+       CS from the timer stub's iretq). At depth 1 the switch happens
+       just before the stub returns, which is exactly the preemption
+       point we want. */
+    if (irq_depth == 0 && n == 0x30)
+        sched_tick();
 }
