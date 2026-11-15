@@ -5,6 +5,8 @@
 
 #include <common.h>
 #include <console.h>
+#include <gdt.h>
+#include <idt.h>
 #include <lib.h>
 #include <limine.h>
 
@@ -98,6 +100,16 @@ void kmain(void)
         }
         kprintf("memory map: %lu entries, %lu MiB usable\n",
                 mm->entry_count, usable >> 20);
+    }
+
+    gdt_init();
+    kprintf("GDT/TSS loaded.\n");
+    idt_init();
+    kprintf("IDT loaded (256 gates).\n");
+    kprintf("M2 self-test: raising divide-by-zero...\n");
+    {
+        volatile u64 num = 1, denom = 0;
+        __asm__ volatile ("divq %2" : "+a"(num) : "d"(num), "m"(denom));
     }
 
     kprintf("M1: serial and framebuffer console online.\n");
