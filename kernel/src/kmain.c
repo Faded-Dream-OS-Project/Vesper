@@ -500,6 +500,7 @@ void kmain(void)
 
         test_begin(&t, "user");
         kprintf("user: launching init in ring 3...\n");
+        user_cap_reset();
         usermode_launch_init();
 
         /* Wait for the init task to finish (exit or fault-kill); the
@@ -508,11 +509,26 @@ void kmain(void)
         while (sched_task_count() > 1 && timer_ticks() < deadline)
             halt();   /* sleep until the next tick wakes us */
 
+        const struct task *iu = sched_last_user_task();
         kprintf("user: init finished, tasks=%lu, ticks=%lu\n",
                 (unsigned long)sched_task_count(),
                 (unsigned long)timer_ticks());
-        test_check(&t, "init ran in ring 3 and exited",
-                   sched_task_count() == 1);
+        /* HONEST init test (session 6): a clean exit(0) through
+           sys_exit AND every expected output line — not just 'the
+           task went away'. */
+        test_check(&t, "init exited cleanly via sys_exit(0)",
+                   iu && iu->fault_vector == 0xFF &&
+                   iu->exit_code == 0);
+        test_check(&t, "init printed the hello banner",
+                   user_cap_contains("init: hello from ring 3"));
+        test_check(&t, "init printed getpid line",
+                   user_cap_contains("init: getpid() = "));
+        test_check(&t, "init printed uptime line",
+                   user_cap_contains("init: uptime_ms() = "));
+        test_check(&t, "init printed bad-ptr errno line",
+                   user_cap_contains("init: write(bad ptr) -> errno "));
+        test_check(&t, "init printed yield-loop counter line",
+                   user_cap_contains("init: yield loop done, counter="));
 
         /* Second user program: deliberately executes hlt in ring 3.
            It must be killed; the kernel must keep running. */
@@ -523,8 +539,19 @@ void kmain(void)
             halt();   /* sleep until the next tick wakes us */
         u64 ticks_after = timer_ticks();
 
+        const struct task *fu = sched_last_user_task();
         kprintf("user: fault_init finished (killed), tasks=%lu\n",
                 (unsigned long)sched_task_count());
+        /* HONEST fault test (session 6): the kill must be exactly a
+           #GP (13) from the privileged hlt, not a #PF or anything
+           else. */
+        kprintf("user: fault_init outcome: vector=%lu rip=%#lx errcode=%#lx\n",
+                fu && fu->fault_vector != 0xFF
+                    ? (unsigned long)fu->fault_vector : 0ul,
+                fu ? fu->fault_rip : 0ul,
+                fu ? fu->fault_errcode : 0ul);
+        test_check(&t, "fault_init killed by #GP (privileged hlt), not #PF",
+                   fu && fu->fault_vector == 13);
         test_check(&t, "privileged instruction killed only the process",
                    sched_task_count() == 1);
         test_check(&t, "kernel kept ticking after the fault",

@@ -92,6 +92,34 @@ static int user_range_ok(u64 addr, u64 len)
 
 /* ---- syscall implementations ---- */
 
+/* Capture ring for the LAST user output (honest tests: the init test
+   requires its exact output lines, session 6). */
+#define USER_CAP 2048
+static char user_cap[USER_CAP];
+static u32 user_cap_len;
+
+void user_cap_reset(void)
+{
+    user_cap_len = 0;
+}
+
+int user_cap_contains(const char *needle)
+{
+    u32 nlen = 0;
+    while (needle[nlen])
+        nlen++;
+    if (nlen == 0 || user_cap_len == 0)
+        return 0;
+    for (u32 i = 0; i + nlen <= user_cap_len; i++) {
+        u32 j = 0;
+        while (j < nlen && user_cap[i + j] == needle[j])
+            j++;
+        if (j == nlen)
+            return 1;
+    }
+    return 0;
+}
+
 static u64 sys_write(struct syscall_frame *f)
 {
     u64 fd = f->rdi, buf = f->rsi, len = f->rdx;
@@ -102,6 +130,9 @@ static u64 sys_write(struct syscall_frame *f)
     const char *p = (const char *)buf;
     for (u64 i = 0; i < len; i++)
         kputchar(p[i]);
+    /* capture (drop overflow silently; tests use short lines) */
+    for (u64 i = 0; i < len && user_cap_len < USER_CAP - 1; i++)
+        user_cap[user_cap_len++] = p[i];
     return len;
 }
 

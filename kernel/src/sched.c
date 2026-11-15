@@ -26,6 +26,7 @@ void sched_switch_to(struct task *prev, struct task *next);
 #define MAX_TASKS 16
 
 static struct task tasks[MAX_TASKS];
+static int last_user_slot = -1;   /* most recent user task (any state) */
 static struct task *current;
 static u64 ready_count;   /* tasks alive (incl. idle) */
 static u64 next_pid = 1;
@@ -82,6 +83,7 @@ static int task_alloc(const char *name, kthread_fn_t fn, void *arg)
 
     struct task *t = &tasks[slot];
     memset(t, 0, sizeof(*t));
+    t->fault_vector = 0xFF;   /* no fault (yet) */
     t->fn = fn;
     t->arg = arg;
     t->state = TASK_READY;
@@ -161,6 +163,7 @@ int task_new_user(const char *name, u64 entry, u64 user_rsp,
     int slot = task_alloc(name, task_enter_user, 0);
     if (slot < 0)
         return -1;
+    last_user_slot = slot;
     struct task *t = &tasks[slot];
 
     t->user_rip = entry;
@@ -288,3 +291,10 @@ void sched_tick(void)
 }
 
 
+
+const struct task *sched_last_user_task(void)
+{
+    if (last_user_slot < 0)
+        return NULL;
+    return &tasks[last_user_slot];
+}

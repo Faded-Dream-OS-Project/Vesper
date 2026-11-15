@@ -34,6 +34,13 @@ struct task {
     u64 user_rsp_top;        /* kernel stack switch target (TSS.rsp0) */
     u64 exit_code;
     u64 pid;
+
+    /* outcome tracking for honest user-mode tests (session 6): */
+    u8  fault_vector;      /* exception number that killed us, 0xFF = none */
+    u8  fault_had_error;   /* exception pushed an error code */
+    u64 fault_rip;
+    u64 fault_cr2;
+    u64 fault_errcode;
 };
 
 enum { TASK_UNUSED = 0, TASK_READY, TASK_RUNNING, TASK_FINISHED };
@@ -51,5 +58,6 @@ void sched_yield(void);      /* cooperative switch */
 void sched_tick(void);       /* timer IRQ preempts (after EOI) */
 struct task *sched_current(void);
 u64  sched_task_count(void);
+const struct task *sched_last_user_task(void);  /* NULL if none ever */
 
 #endif /* VESPER_SCHED_H */
