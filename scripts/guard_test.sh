@@ -12,10 +12,11 @@
 # is the pass condition.
 
 set -u
-TOOLS=/home/z/my-project/.tools/root
-export PATH="$TOOLS/usr/bin:$TOOLS/usr/sbin:$PATH"
-export LD_LIBRARY_PATH="$TOOLS/usr/lib/x86_64-linux-gnu:$TOOLS/usr/lib"
-SHARE=$TOOLS/usr/share/qemu
+export LC_ALL=C
+# QEMU from PATH (env override QEMU_BIN); roms dir derived from it.
+QEMU="${QEMU_BIN:-$(command -v qemu-system-x86_64 2>/dev/null)}"
+SHARE=$(dirname "$(command -v "$QEMU")")/../share/qemu
+SHARE=$(cd "$SHARE" 2>/dev/null && pwd)
 cd "$(dirname "$0")/.."
 
 sed 's/^    cmdline:$/    cmdline: guard_test/' limine.conf > build/limine.conf.guard
@@ -23,7 +24,7 @@ make iso CONF=build/limine.conf.guard >/dev/null 2>&1 || \
     { echo "make iso failed"; exit 1; }
 
 rm -f build/serial.log
-timeout 90 qemu-system-x86_64 -L "$SHARE" -machine q35 -m 512M \
+timeout 90 "$QEMU" -L "$SHARE" -machine q35 -m 512M \
     -cdrom vesper.iso -serial file:build/serial.log -display none -no-reboot \
     > /dev/null 2>&1 &
 QPID=$!

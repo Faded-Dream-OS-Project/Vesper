@@ -2,31 +2,49 @@
 # Copyright (c) Faded Dream OS Project. All rights reserved.
 # Source is viewable but may not be copied, modified, or redistributed
 # without permission.
+#
+# Portable build (session 7): no hard-coded paths. The toolchain is
+# discovered in this order (first hit wins):
+#   1. x86_64-elf-* cross toolchain (preferred, if installed)
+#   2. host cc/ld (gcc or clang) IF it honours the freestanding flag
+#      set below — verified by scripts/check_cc.sh at build time; a
+#      compiler that cannot honour them fails the build with a clear
+#      message instead of producing a broken kernel.
+# QEMU/OVMF are found via PATH then standard distro locations, with
+# QEMU_BIN / OVMF_DIR environment overrides. Everything runs under
+# LC_ALL=C so locale never changes tool output parsing.
 
-# ---- toolchain ----
-# The sandbox has no x86_64-elf cross gcc; the host gcc with explicit
-# freestanding flags produces position-precise ELF objects for the
-# kernel as long as we avoid referencing the host libc. Target is
-# x86_64, code model kernel (higher half).
-CC      := gcc
-LD      := ld
-OBJCOPY := objcopy
+export LC_ALL := C
 
-# Local tool prefix (QEMU etc. unpacked from .debs without root).
-TOOLS   := $(HOME)/my-project/.tools/root
-QEMU    := $(TOOLS)/usr/bin/qemu-system-x86_64
-QEMU_IMG:= $(TOOLS)/usr/bin/qemu-img
-OVMF    := $(TOOLS)/usr/share/OVMF/OVMF_CODE_4M.fd
-OVMF_VARS := $(TOOLS)/usr/share/OVMF/OVMF_VARS_4M.fd
-MKFS    := $(TOOLS)/usr/sbin/mkfs.vfat
-LIMINE  := thirdparty/limine/limine
+SHELL := /usr/bin/env bash
 
-# Allow external override (e.g. a real x86_64-elf-gcc on another host).
-ifeq ($(shell command -v x86_64-elf-gcc >/dev/null 2>&1 && echo yes),yes)
-CC := x86_64-elf-gcc
-LD := x86_64-elf-ld
-OBJCOPY := x86_64-elf-objcopy
+# ---- toolchain discovery ----
+ifeq ($(origin CC),default)
+  ifeq ($(shell command -v x86_64-elf-gcc >/dev/null 2>&1 && echo yes),yes)
+    CC := x86_64-elf-gcc
+  else
+    CC := gcc
+  endif
 endif
+# LD: the cross linker when a cross gcc was chosen, else plain ld.
+# (Never 'gcc' itself as LD: gcc-as-linker adds crt/stdlib wiring we
+# explicitly do not want; the kernel links with -nostdlib -T.)
+LD := $(shell if [ "$(CC)" = "x86_64-elf-gcc" ] && command -v x86_64-elf-ld >/dev/null 2>&1; then \
+              echo x86_64-elf-ld; else command -v ld >/dev/null 2>&1 && echo ld; fi)
+OBJCOPY := $(shell if [ "$(CC)" = "x86_64-elf-gcc" ] && command -v x86_64-elf-objcopy >/dev/null 2>&1; then \
+              echo x86_64-elf-objcopy; else command -v objcopy >/dev/null 2>&1 && echo objcopy; fi)
+
+# QEMU / OVMF discovery: env override > PATH > distro locations.
+QEMU_BIN  ?= $(shell command -v qemu-system-x86_64 2>/dev/null || \
+               for f in /usr/bin/qemu-system-x86_64; do [ -x $$f ] && echo $$f && break; done)
+OVMF_DIR  ?= $(shell for d in /usr/share/OVMF /usr/share/ovmf /usr/share/edk2/ovmf \
+                         /usr/share/qemu/OVMF; do [ -d $$d ] && echo $$d && break; done)
+OVMF_CODE ?= $(firstword $(wildcard $(OVMF_DIR)/OVMF_CODE_4M.fd $(OVMF_DIR)/OVMF_CODE.fd))
+OVMF_VARS ?= $(firstword $(wildcard $(OVMF_DIR)/OVMF_VARS_4M.fd $(OVMF_DIR)/OVMF_VARS.fd))
+QEMU_ROMS ?= $(dir $(QEMU_BIN))../share/qemu
+QEMU_ROMS := $(abspath $(QEMU_ROMS))
+
+LIMINE  := thirdparty/limine/limine
 
 KERNEL  := vesper.elf
 ISO     := vesper.iso
@@ -57,24 +75,26 @@ KERNEL_OBJS := $(patsubst kernel/src/%.c,build/%.o,$(KERNEL_SRCS)) \
 $(KERNEL_OBJS): $(BUILD_ID_HDR)
 
 CFLAGS := -std=c17 -Wall -Wextra -ffreestanding -nostdlib \
-          -fno-stack-protector -fno-pic -fno-pie -mno-red-zone \
-          -mno-sse -mno-mmx -mno-3dnow -mcmodel=kernel \
+          -fno-stack-protector -fno-pie -fno-pic \
+          -fcf-protection=none \
+          -mno-red-zone -mno-sse -mno-mmx -mno-avx -mno-3dnow \
+          -mcmodel=kernel \
           -O2 -g -fno-omit-frame-pointer \
           -Ikernel/include -Ithirdparty/limine \
           -Wno-override-init
 
 LDFLAGS := -nostdlib -static -z max-page-size=0x1000 -T kernel/linker.ld
 
-.PHONY: all clean run iso img $(KERNEL_SRCS)
+.PHONY: all clean run iso img doctor $(KERNEL_SRCS)
 
-all: $(KERNEL)
+all: check-cc $(KERNEL)
 
-# print the compiler actually in use on every build (Task: portable
-# build; a photo/console mismatch is debuggable only if we know it)
-.PHONY: cc-info
-cc-info:
-	@echo "CC      : $(CC) ($$($(CC) -dumpfullversion -dumpversion 2>/dev/null || $(CC) -dumpversion))"
-	@echo "LD      : $(LD)"
+# Fail loud if the compiler cannot honour the freestanding flag set:
+# a host gcc/clang that silently ignores -mno-sse or -fcf-protection=none
+# would emit SSE/CET instructions that fault at boot on real firmware.
+.PHONY: check-cc
+check-cc: $(BUILD_ID_HDR)
+	@bash scripts/check_cc.sh $(CC)
 
 build/%.o: kernel/src/%.c | build
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -105,7 +125,7 @@ kernel/src/isr_stubs.S: scripts/gen_isr_stubs.py
 build:
 	mkdir -p build
 
-$(KERNEL): $(KERNEL_OBJS) kernel/linker.ld
+$(KERNEL): check-cc $(KERNEL_OBJS) kernel/linker.ld
 	@echo "CC      : $(CC) ($$($(CC) -dumpfullversion -dumpversion 2>/dev/null || $(CC) -dumpversion))  LD: $(LD)"
 	$(LD) $(LDFLAGS) $(KERNEL_OBJS) -o $@
 
@@ -145,8 +165,6 @@ MTOOLS := env MTOOLS_SKIP_CHECK=1
 img: $(IMG)
 
 $(IMG): $(KERNEL) $(LIMINE) limine.conf scripts/make_gpt.py | build
-	@esp_secs=$$(( $$(stat -c%s $(IMG) 2>/dev/null || echo 0) )); \
-	esp_secs=$$(( IMG_SZ_MB_HACK )); true
 	python3 scripts/make_gpt.py $(IMG) $$(( $(IMG_SZ_MB) * 1024 * 1024 )) $(ESP_LBA) $$(( $(IMG_SZ_MB) * 1024 * 1024 / 512 - $(ESP_LBA) - 34 ))
 	$(MTOOLS) mformat -i $(IMG)@@$(ESP_LBA)S -c 1 -H $(ESP_LBA) -T $$(( $(IMG_SZ_MB) * 1024 * 1024 / 512 - $(ESP_LBA) - 34 )) -n VESPER ::
 	$(MTOOLS) mmd -i $(IMG)@@$(ESP_LBA)S ::/EFI ::/EFI/BOOT
@@ -157,10 +175,14 @@ $(IMG): $(KERNEL) $(LIMINE) limine.conf scripts/make_gpt.py | build
 	$(LIMINE) bios-install --force $(IMG) 2 --uninstall-data-file=$(IMG).uninstall
 	truncate -s $$(( $(IMG_SZ_MB) * 1024 * 1024 )) $(IMG)
 
+# ---- environment check ----
+doctor:
+	bash scripts/doctor.sh
+
 # ---- QEMU ----
-QEMU_ROMS := $(TOOLS)/usr/share/qemu
+# Only used by `make run`; OVMF missing => clear message, not a hang.
 QEMU_ARGS := -L $(QEMU_ROMS) -machine q35 -m 512M \
-    -drive if=pflash,format=raw,file=$(OVMF),readonly=on \
+    -drive if=pflash,format=raw,file=$(OVMF_CODE),readonly=on \
     -drive if=pflash,format=raw,file=build/OVMF_VARS.fd \
     -cdrom $(ISO) \
     -serial file:build/serial.log -display none -no-reboot
@@ -173,9 +195,11 @@ build/OVMF_VARS.fd: $(OVMF_VARS) | build
 # serial output is captured to build/serial.log and dumped on exit.
 RUN_SECS ?= 30
 run: $(ISO) build/OVMF_VARS.fd
+	@test -n "$(QEMU_BIN)" || (echo "run: qemu-system-x86_64 not found (see scripts/doctor.sh)"; exit 1)
+	@test -n "$(OVMF_CODE)" || (echo "run: OVMF firmware not found (see scripts/doctor.sh)"; exit 1)
 	@rm -f build/serial.log
 	@echo ">> qemu (UEFI/OVMF) starting, $(RUN_SECS)s budget; serial -> build/serial.log"
-	@timeout $(RUN_SECS) $(QEMU) $(QEMU_ARGS) || test $$? -eq 124
+	@timeout $(RUN_SECS) $(QEMU_BIN) $(QEMU_ARGS) || test $$? -eq 124
 	@echo ">> serial output:"
 	@cat build/serial.log | tr -c '[:print:]\n' ' ' | grep -a . | tail -n 30
 
@@ -189,4 +213,5 @@ $(KERNEL_SRCS): ;
 
 .PHONY: help
 help:
-	@echo "targets: all (vesper.elf), iso, img, run, clean"
+	@echo "targets: all (vesper.elf), iso, img, run (QEMU/OVMF), doctor (env check), clean"
+	@echo "env: QEMU_BIN, OVMF_DIR, OVMF_CODE, OVMF_VARS, CONF, RUN_SECS"
