@@ -36,6 +36,7 @@ SECTIONS
         KEEP(*(.limine_requests.6))
         KEEP(*(.limine_requests.7))
         KEEP(*(.limine_requests.8))
+        KEEP(*(.limine_requests.9))
         KEEP(*(.limine_requests))
     } :text
 

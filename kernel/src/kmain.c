@@ -8,6 +8,7 @@
 #include <gdt.h>
 #include <idt.h>
 #include <lib.h>
+#include <acpi.h>
 #include <limine.h>
 #include <pic.h>
 #include <pmm.h>
@@ -45,25 +46,31 @@ static struct limine_memmap_request memmap_request = {
 };
 
 __attribute__((used, section(".limine_requests.5")))
+static struct limine_rsdp_request rsdp_request = {
+    .id = LIMINE_RSDP_REQUEST_ID,
+    .revision = 0,
+};
+
+__attribute__((used, section(".limine_requests.6")))
 static struct limine_stack_size_request stack_size_request = {
     .id = LIMINE_STACK_SIZE_REQUEST_ID,
     .revision = 0,
     .stack_size = 0x10000,   /* 64 KiB */
 };
 
-__attribute__((used, section(".limine_requests.6")))
+__attribute__((used, section(".limine_requests.7")))
 static struct limine_bootloader_info_request bootloader_info_request = {
     .id = LIMINE_BOOTLOADER_INFO_REQUEST_ID,
     .revision = 0,
 };
 
-__attribute__((used, section(".limine_requests.7")))
+__attribute__((used, section(".limine_requests.8")))
 static struct limine_executable_address_request executable_address_request = {
     .id = LIMINE_EXECUTABLE_ADDRESS_REQUEST_ID,
     .revision = 0,
 };
 
-__attribute__((used, section(".limine_requests.8")))
+__attribute__((used, section(".limine_requests.9")))
 static volatile uint64_t limine_requests_end[2] =
     LIMINE_REQUESTS_END_MARKER;
 
@@ -128,6 +135,19 @@ void kmain(void)
              executable_address_request.response);
     kprintf("VMM: own PML4 active at %#llx\n",
             (unsigned long long)(read_cr3() & ~0xFFFull));
+
+    /* ACPI: Limine hands us the RSDP; walk it to the MADT for the
+       LAPIC/IOAPIC addresses (x86-64 QEMU always uses ACPI 2.0). */
+    if (rsdp_request.response && acpi_init(rsdp_request.response->address) == 0) {
+        const struct acpi_info *ai = acpi_get_info();
+        kprintf("ACPI: MADT ok — LAPIC %#lx, IOAPIC %#lx (GSI %lu base), %lu LAPICs\n",
+                ai->lapic_base, ai->ioapic_base,
+                (unsigned long)ai->ioapic_gsi_base,
+                (unsigned long)ai->lapic_count);
+    } else {
+        kprintf("ACPI: MADT unavailable\n");
+    }
+
 
     /* M3 VMM self-test. */
 
