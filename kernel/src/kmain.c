@@ -247,7 +247,11 @@ void kmain(void)
         kprintf("ACPI: MADT unavailable\n");
     }
 
-    /* LAPIC + IOAPIC from the MADT, then the calibrated timer. */
+    /* LAPIC + IOAPIC from the MADT, then the calibrated timer.
+       Multi-CPU contract (session 5): the MADT may list any number of
+       LAPICs — only the BSP runs Vesper; the APs are never woken (no
+       INIT-SIPI is sent), so they stay parked wherever Limine left
+       them. Nothing here assumes a single-CPU MADT layout. */
     {
         const struct acpi_info *ai = acpi_get_info();
         if (ai->valid) {
@@ -460,13 +464,16 @@ void kmain(void)
 
         /* Idle waits for all three to finish. Note the busy threads
            cannot yield: their completion IS the preemption proof. */
+        /* Idle sleeps in hlt between ticks (idle task power-saver);
+           the busy threads cannot yield, so their completion IS the
+           preemption proof. Counters must never go backwards. */
         u64 spins = 0;
         while (sched_task_count() > 1 && spins++ < 5000000000ull) {
             u64 c0 = m5_counts[0], c1 = m5_counts[1], c2 = m5_counts[2];
-            __asm__ volatile ("pause");
+            halt();   /* woken by each timer tick (IF=1) */
             if (m5_counts[0] < c0 || m5_counts[1] < c1 ||
                 m5_counts[2] < c2)
-                break;   /* counters must never go backwards */
+                break;
         }
 
         kprintf("  counters: a=%lu b=%lu c=%lu (ticks=%lu)\n",
@@ -499,7 +506,7 @@ void kmain(void)
            scheduler round-robins us with it. */
         u64 deadline = timer_ticks() + 20 * TIMER_HZ;
         while (sched_task_count() > 1 && timer_ticks() < deadline)
-            __asm__ volatile ("pause");
+            halt();   /* sleep until the next tick wakes us */
 
         kprintf("user: init finished, tasks=%lu, ticks=%lu\n",
                 (unsigned long)sched_task_count(),
@@ -513,7 +520,7 @@ void kmain(void)
         usermode_launch_fault_init();
         deadline = timer_ticks() + 20 * TIMER_HZ;
         while (sched_task_count() > 1 && timer_ticks() < deadline)
-            __asm__ volatile ("pause");
+            halt();   /* sleep until the next tick wakes us */
         u64 ticks_after = timer_ticks();
 
         kprintf("user: fault_init finished (killed), tasks=%lu\n",
@@ -540,7 +547,7 @@ void kmain(void)
         (void)ovf_id;
         u64 deadline = timer_ticks() + 10 * TIMER_HZ;
         while (timer_ticks() < deadline)
-            __asm__ volatile ("pause");
+            halt();
     }
 
     kprintf("M2 self-test: raising divide-by-zero...\n");
