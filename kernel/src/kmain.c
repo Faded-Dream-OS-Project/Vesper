@@ -22,6 +22,7 @@
 #include <usermode.h>
 #include <vmm.h>
 #include <heap.h>
+#include <build_id.h>   /* generated: git hash, compiler, date */
 
 /* ---- Limine requests ----
    Marked sections bracket the request block; the bootloader scans it
@@ -195,6 +196,10 @@ void kmain(void)
 
     kprintf("\n");
     kprintf("Vesper " VESPER_VERSION " (kernel of Faded Dream OS)\n");
+    /* Build identity FIRST: a photo of any boot (or a black screen with
+       only the early breadcrumbs) identifies the exact build. */
+    kprintf("build: git %s, %s, %s\n",
+            BUILD_ID_GIT, BUILD_ID_CC, BUILD_ID_STAMP);
 
     struct limine_bootloader_info_response *bl =
         bootloader_info_request.response;

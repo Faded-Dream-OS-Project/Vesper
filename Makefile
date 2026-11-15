@@ -31,6 +31,19 @@ endif
 KERNEL  := vesper.elf
 ISO     := vesper.iso
 IMG     := vesper.img
+BUILD_ID_HDR := kernel/include/build_id.h
+
+# Build identity (git hash + dirty + compiler version) stamped into a
+# generated header on every build; the kernel prints it as the first
+# boot line so a photo identifies the exact build. Not committed.
+$(BUILD_ID_HDR): FORCE
+	@bash scripts/gen_build_id.sh $(CC) $@
+
+.PHONY: FORCE
+FORCE:
+
+.PHONY: build-id
+build-id: $(BUILD_ID_HDR)
 
 KERNEL_SRCS := $(wildcard kernel/src/*.c)
 ASM_SRCS    := kernel/src/isr_stubs.S kernel/src/gdt_flush.S \
@@ -39,6 +52,9 @@ ASM_SRCS    := kernel/src/isr_stubs.S kernel/src/gdt_flush.S \
 KERNEL_OBJS := $(patsubst kernel/src/%.c,build/%.o,$(KERNEL_SRCS)) \
                build/isr_stubs.o build/gdt_flush.o build/sched_switch_to.o \
                build/syscall_entry.o build/init_blob.o
+
+# objects depend on the generated build id (hash changes = relink)
+$(KERNEL_OBJS): $(BUILD_ID_HDR)
 
 CFLAGS := -std=c17 -Wall -Wextra -ffreestanding -nostdlib \
           -fno-stack-protector -fno-pic -fno-pie -mno-red-zone \
@@ -52,6 +68,13 @@ LDFLAGS := -nostdlib -static -z max-page-size=0x1000 -T kernel/linker.ld
 .PHONY: all clean run iso img $(KERNEL_SRCS)
 
 all: $(KERNEL)
+
+# print the compiler actually in use on every build (Task: portable
+# build; a photo/console mismatch is debuggable only if we know it)
+.PHONY: cc-info
+cc-info:
+	@echo "CC      : $(CC) ($$($(CC) -dumpfullversion -dumpversion 2>/dev/null || $(CC) -dumpversion))"
+	@echo "LD      : $(LD)"
 
 build/%.o: kernel/src/%.c | build
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -83,6 +106,7 @@ build:
 	mkdir -p build
 
 $(KERNEL): $(KERNEL_OBJS) kernel/linker.ld
+	@echo "CC      : $(CC) ($$($(CC) -dumpfullversion -dumpversion 2>/dev/null || $(CC) -dumpversion))  LD: $(LD)"
 	$(LD) $(LDFLAGS) $(KERNEL_OBJS) -o $@
 
 # ---- host tool (Limine) ----

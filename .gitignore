@@ -4,5 +4,6 @@ build/
 *.iso
 *.img
 *.log
+kernel/include/build_id.h
 thirdparty/limine/limine
 vesper.img.uninstall
