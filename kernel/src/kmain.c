@@ -9,10 +9,13 @@
 #include <idt.h>
 #include <lib.h>
 #include <acpi.h>
+#include <apic.h>
+#include <irq.h>
 #include <limine.h>
 #include <pic.h>
 #include <pmm.h>
 #include <selftest.h>
+#include <timer.h>
 #include <vmm.h>
 #include <heap.h>
 
@@ -148,6 +151,28 @@ void kmain(void)
         kprintf("ACPI: MADT unavailable\n");
     }
 
+    /* LAPIC + IOAPIC from the MADT, then the calibrated timer. */
+    {
+        const struct acpi_info *ai = acpi_get_info();
+        if (ai->valid) {
+            apic_init(ai->lapic_base, ai->ioapic_base, ai->ioapic_gsi_base);
+            kprintf("APIC: LAPIC online (spurious vector 0xFF, EOI broadcast).\n");
+        } else {
+            kprintf("APIC: unavailable; halting.\n");
+            for (;;)
+                halt();
+        }
+    }
+
+    timer_init();
+    irq_install(TIMER_VECTOR, timer_irq);
+    kprintf("timer: LAPIC timer calibrated (%lu Hz bus), %lu Hz tick\n",
+            (unsigned long)timer_lapic_freq(), (unsigned long)TIMER_HZ);
+
+    /* Enable interrupts. */
+    sti();
+    kprintf("interrupts enabled (sti).\n");
+
 
     /* M3 VMM self-test. */
 
@@ -248,6 +273,34 @@ void kmain(void)
             test_check(&t, "stress 64 allocs + frees", ok);
             test_check(&t, "stress leaves heap empty",
                        kheap_used() == 0);
+        }
+        test_summary(&t);
+    }
+
+    {
+        struct test_ctx t;
+        u64 t0, t1;
+
+        test_begin(&t, "timer");
+        t0 = timer_ticks();
+        timer_sleep_ms(100);
+        t1 = timer_ticks();
+        {
+            u64 ms = timer_uptime_ms();
+            /* 100 ms at 100 Hz = 10 ticks; allow 8..12 for jitter. */
+            int ok_ticks = (t1 - t0) >= 8 && (t1 - t0) <= 12;
+            test_check(&t, "100ms sleep advances ticks ~10",
+                       ok_ticks);
+            test_check(&t, "uptime plausible (>=100ms)", ms >= 100);
+            test_check(&t, "interrupts counted (EOI loop works)",
+                       irq_count() >= 8);
+        }
+        /* The timer must keep ticking (EOI + periodic reload OK). */
+        {
+            u64 before = timer_ticks();
+            timer_sleep_ms(50);
+            test_check(&t, "timer still ticking after sleep",
+                       timer_ticks() > before);
         }
         test_summary(&t);
     }

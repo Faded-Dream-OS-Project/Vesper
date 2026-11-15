@@ -8,6 +8,7 @@
 #include <gdt.h>
 #include <idt.h>
 #include <isr.h>
+#include <irq.h>
 #include <lib.h>
 
 /* IDT installation. Gates point at the generated stubs via the
@@ -37,9 +38,11 @@ void isr_dispatcher(struct int_frame *frame)
     exception_handler(frame);
 }
 
+/* Generated stubs land here for vectors 32..255; irq.c owns the
+   handler table and LAPIC EOI. */
 void irq_dispatcher(struct int_frame *frame)
 {
-    irq_generic(frame);
+    irq_dispatch(frame);
 }
 
 void idt_init(void)
