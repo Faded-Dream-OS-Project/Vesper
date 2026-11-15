@@ -1,10 +1,16 @@
-# Vesper — development handoff (2026-11-15, session 4)
+# Vesper — development handoff (2026-11-15, session 5)
 
-State: milestones 1-6 complete and verified; all session-3 shortcuts
-paid down (preemption root-caused, kbd test gated, RWX gone, guard
-pages + overflow self-test). Branch `main` (sole branch). All commits
+State: milestones 1-7 complete **in QEMU**; M7 (real-hardware boot)
+is now awaiting a human flash test of vesper.img per
+docs/REAL_HARDWARE.md. Branch `main` (sole branch). All commits
 attributed to FemBoyGamerTechGuy
 <242450780+FemBoyGamerTechGuy@users.noreply.github.com>.
+
+Session 5 delivered: full on-screen framebuffer console with colours,
+the boot diagnostics screen, hardware-robustness fixes (IOAPIC MADT
+overrides + multi-controller, timer calibration ladder with degraded
+mode, i8042 probe, hlt idle, multi-CPU tolerance), the verified USB
+image + scripts/verify_image.sh, and the real-hardware flash guide.
 
 ## Identity rule
 Every future commit MUST use:
@@ -83,21 +89,56 @@ read-back, LAPIC EOI/re-arm, the two-arg context switch).
     stack growth, guard never hit) — use a volatile fn pointer and
     keep a statement after the call.
 
-## M7 plan (next milestone: bootable USB image + docs)
-1. `make img` already produces a GPT disk (BIOS-boot partition +
-   FAT32 ESP with BOOTX64.EFI, limine.conf, kernel) that boots OVMF
-   (AHCI) and SeaBIOS — re-verify with the CURRENT kernel (user mode
-   changes the boot requirements none, but the RWX segment split
-   changed the image layout).
-2. Add the init blobs to the image build (kernel image already embeds
-   them — verify img boots and reaches M6 self-tests).
-3. Write flashing/boot docs (dd command, safe target selection, what
-   to expect on real hardware; USB keyboard NOT supported until USB —
-   serial console is the only interactive channel on metal).
-4. Optional hardening if time: per-task kernel stacks for interrupts
-   (currently TSS.rsp0 == the runner's syscall stack), LAPIC timer
-   one-shot deadline mode, and a proper idle task (hlt loop with
-   preemption) instead of the kmain spin loop.
+## Next plan (session 6: first real-hardware fixes)
+The human flashes vesper.img per docs/REAL_HARDWARE.md and reports
+back (photo + machine model + CPU + firmware version). Likely fix
+areas, in expected order of likelihood:
+1. Framebuffer quirks: unusual bpp/pitch/masks (15bpp RGB555,
+   BGR-order masks) or text rendered in a bad scale — the console
+   already handles all documented formats, so a photo will show what
+   the firmware actually set.
+2. ACPI layout oddities: the walk skips bad-checksum/absurd-length
+   entries non-fatally, but a machine with an RSDT-only (ACPI 1.0)
+   or zero-length root table could still print 'no valid tables' —
+   then the LAPIC defaults matter.
+3. Timer: if all calibrations fail on metal, the degraded-mode
+   warning appears; a photo plus the CPU (leaf 0x15/0x16 presence)
+   will tell which rung to fix.
+4. IOAPIC overrides with level/edge or polarity flags (the flags are
+   parsed and printed but the redirection entries are still programmed
+   edge/active-high for ISA-style inputs — honour flags if a device
+   misbehaves).
+5. Interrupt-stack hardening (deferred from session 4): interrupts
+   during ring 3 reuse the runner's syscall stack (TSS.rsp0 ==
+   kstack_cur); a per-task interrupt stack would remove the last
+   known structural risk.
+6. USB keyboard support (xHCI) so real machines without PS/2 can
+   interact — currently informational only.
+
+## Session 5 gotchas (26-32)
+26. mdir splits FAT name/extension into separate columns — verify ESP
+    contents with `mdir -b` (bare path format), not by grepping the
+    default listing.
+27. GPT header CRC is computed over header_size bytes with ONLY the
+    CRC field (offset 16) zeroed — the entries CRC at offset 88
+    participates in the header CRC; zeroing both yields a mismatch.
+28. HPET base address in the HPET table lives inside a Generic
+    Address Structure at table offset +44 (after the 4-byte GAS
+    prefix at +40); reading a u64 at +40 reads the GAS space-id and
+    garbage — a #GP in the HPET fallback.
+29. The HPET main counter does not advance unless ENABLE_CNF (GC
+    bit 0) is set — firmware may leave it off; set it before using
+    the counter as a calibration reference.
+30. MADT interrupt-source-override fields sit at entry offsets
+    2/3/4/8 (bus/source/gsi/flags) AFTER the 2-byte entry header —
+    offsets 4/5/8/12 decode garbage GSI numbers.
+31. Limine's framebuffer/memmap request structs live in
+    .limine_requests.N sections; exporting them for another file
+    requires making them non-static AND the symbol names must match
+    exactly (fb_request vs framebuffer_request cost a build loop).
+32. QEMU always emulates the i8042 ports even with -nodefaults (they
+    are chipset functionality, not a device) — the PS/2-absent path
+    can only be exercised with the kbd_test_absent cmdline flag.
 
 ## Verification commands
 ```
