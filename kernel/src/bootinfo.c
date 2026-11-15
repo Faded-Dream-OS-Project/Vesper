@@ -7,6 +7,7 @@
 #include <acpi.h>
 #include <console.h>
 #include <cpu.h>
+#include <gdt.h>
 #include <limine.h>
 #include <lib.h>
 #include <breadcrumb.h>
@@ -63,6 +64,12 @@ void bootinfo_print(void)
        squares until the console took over): report the last stage. */
     kprintf("boot stages: %d reached, last code %d (see docs/REAL_HARDWARE.md)\n",
             breadcrumb_count(), (int)breadcrumb_last());
+
+    /* GDT: raw + decoded entries (session 8 — the human's hardware
+       #GP'd with err=0x28, naming descriptor 5; now every photo shows
+       the whole table) and lar/lsl verification of each selector. */
+    gdt_dump("boot");
+    gdt_verify_selectors();
 
     /* Control registers (post-sanitize; boot_cr4 is the pre state). */
     {

@@ -73,7 +73,29 @@ syscall_entry:
     popq %r11
     popq %rcx
     popq %r10                        /* user RSP */
-    movq %r12, %rax                 /* result */
+    /* frame validation (session 8): RIP is in RCX, RFLAGS in R11, user
+       RSP in R10. The check CALLS C: rdi/rsi/rdx carry user values
+       already popped, rcx/r11 are CALLER-SAVED (and exactly what
+       sysretq loads), and rax/r12 hold the syscall result — every
+       register the CPU or the ABI will need after this point is
+       saved across the call. */
+    pushq %rdi
+    pushq %rsi
+    pushq %rdx
+    pushq %rcx
+    pushq %r11
+    pushq %rax
+    movq %r10, %rdx                 /* arg3: user RSP */
+    movq %r11, %rsi                 /* arg2: rflags */
+    movq %rcx, %rdi                 /* arg1: user RIP */
+    call user_return_frame_check
+    popq %rax
+    popq %r11
+    popq %rcx
+    popq %rdx
+    popq %rsi
+    popq %rdi
+    movq %r12, %rax                 /* result (restored AFTER the call) */
     movq %r10, %rsp
     sysretq
 

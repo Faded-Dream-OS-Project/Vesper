@@ -5,12 +5,18 @@
 
 #include <common.h>
 #include <console.h>
+#include <gdt.h>
 #include <isr.h>
 #include <lib.h>
 #include <sched.h>
 #include <usermode.h>
 
-/* Exception dispatch and register dump. */
+/* Exception dispatch and register dump.
+
+   Session 8: #GP/#SS/#NP error codes are selector references — decode
+   index/TI/IDT/EXT and dump the GDT so a photo names the exact
+   descriptor the CPU rejected (the human's hardware #GP had
+   err=0x28 = GDT index 5 = the old Limine-compat descriptor). */
 
 static const char *const exc_names[32] = {
     "Divide-by-zero", "Debug", "NMI", "Breakpoint",
@@ -29,6 +35,24 @@ const char *exception_name(u64 n)
     if (n < 32)
         return exc_names[n];
     return "Unknown";
+}
+
+/* Decode a selector-ish error code (vectors 10/11/12/13) and dump the
+   GDT alongside. err bits: 0=EXT (external event), 1=IDT (index into
+   the IDT), 2=TI (LDT vs GDT), 15:3 = selector index. */
+static void decode_selector_error(u64 n, u64 err)
+{
+    if (n == 13 || n == 10 || n == 11 || n == 12) {
+        int ext = (int)(err & 1), idt = (int)((err >> 1) & 1),
+            ti = (int)((err >> 2) & 1);
+        u64 idx = (err >> 3) & 0x1FFF;
+        kprintf("err decode: EXT=%d IDT=%d TI=%d index=%lu "
+                "-> selector %#04lx\n",
+                ext, idt, ti, (unsigned long)idx,
+                (unsigned long)((idx << 3) | (ti << 2)));
+        if (!idt)
+            gdt_dump("selector-fault");
+    }
 }
 
 /* Was this exception one that pushes an error code? (0x8, 0xA-0xE,
@@ -57,6 +81,9 @@ void exception_handler(struct int_frame *frame)
                 frame->int_no, exception_name(frame->int_no),
                 frame->rip,
                 vector_has_error(frame->int_no) ? frame->errcode : 0ul);
+        decode_selector_error(frame->int_no,
+                               vector_has_error(frame->int_no)
+                                   ? frame->errcode : 0);
         if (frame->int_no == 14) {
             u64 cr2 = read_cr2();
             kprintf("  #PF errcode bits: P=%lu W=%lu U=%lu R=%lu I=%lu\n",
@@ -110,6 +137,7 @@ void exception_handler(struct int_frame *frame)
                 "  stack pointer below its guard page means a kernel\n"
                 "  thread stack overflow hit the guard page)\n",
                 read_cr2(), sched_current()->name, frame->rsp);
+    decode_selector_error(frame->int_no, frame->errcode);
 
     kprintf("RAX=%#016lx RBX=%#016lx RCX=%#016lx RDX=%#016lx\n",
             frame->rax, frame->rbx, frame->rcx, frame->rdx);

@@ -43,6 +43,12 @@ void usermode_init(void);          /* MSR STAR/LSTAR/SFMASK, EFER.SCE */
 u64  syscall_c_entry(struct syscall_frame *f);  /* called from asm */
 u64  syscall_kernel_rsp(void);     /* (kept for completeness) */
 
+/* Ring-3 return-frame validation (session 8): called from
+   syscall_entry.S right before sysretq with RIP(RCX), RFLAGS(R11) and
+   user RSP; panics with the failing FIELD named if anything would
+   #GP on the way out. */
+void user_return_frame_check(u64 rip, u64 rflags, u64 rsp);
+
 /* Launch the current task into ring 3 (called by the kernel runner
    thread; user_enter does the actual sysret). */
 void task_enter_user(void *arg);

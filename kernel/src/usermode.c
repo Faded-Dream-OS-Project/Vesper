@@ -223,6 +223,35 @@ u64 syscall_kernel_rsp(void)
     return kstack_cur;
 }
 
+/* ---- ring-3 return frame validation (session 8, task 1.6) ----
+   Called from syscall_entry.S right before sysretq, with the frame
+   fields the CPU will use. A bad frame must PANIC with a message
+   naming the failing field (a silent #GP on real hardware is exactly
+   the bug class this hunts) — the validation mirrors the SYSRET
+   rules: RCX canonical user RIP, RFLAGS with bit1 set and no reserved
+   bits, and (fixed by STAR) CS/SS loads we verify via lar at boot. */
+void user_return_frame_check(u64 rip, u64 rflags, u64 rsp)
+{
+    if (rip >= 0x0000800000000000ull ||
+        (rip & 0xFFFF000000000000ull) != 0)
+        panic("sysret frame: non-canonical user RIP %#lx "
+              "(frame corrupted?)", (unsigned long)rip);
+    if ((rflags & 0x2) == 0)
+        panic("sysret frame: RFLAGS bit1 clear (%#lx) — reserved-bit "
+              "violation would #GP", (unsigned long)rflags);
+    /* Flags a user frame may legally carry: CF|PF|AF|ZF|SF|TF|IF|DF|OF|AC
+       plus the fixed bit1. Anything above bit21 or in the reserved gaps
+       (15:10, IOPL 13:12 for ring 3, 5..3) is a corrupted frame. */
+    u64 allowed = 0x000000000040FD7ull;
+    u64 badbits = rflags & ~allowed;
+    if (badbits)
+        panic("sysret frame: RFLAGS reserved bits set (%#lx, bad=%#lx)",
+              (unsigned long)rflags, (unsigned long)badbits);
+    if (rsp == 0 || rsp >= 0x0000800000000000ull)
+        panic("sysret frame: user RSP not in user half (%#lx)",
+              (unsigned long)rsp);
+}
+
 /* ---- ring-3 launcher ---- */
 
 void task_enter_user(void *arg)
