@@ -42,6 +42,15 @@ enum fb_color {
 void fb_set_color(u32 color);
 u32  fb_get_color(void);
 
+/* Shadow-buffer console control + stats (session 6). */
+void fb_flush(void);          /* push all dirty rows to video RAM */
+void fb_tick(void);           /* ~30 Hz auto-flush cadence */
+u64  fb_flush_ms(void);       /* total ms spent flushing (TSC) */
+u32  fb_scale(void);          /* text pixel scale in use */
+int  fb_pat_wc(void);         /* 1 = framebuffer mapped write-combining */
+u32  fb_width(void);
+u32  fb_height(void);
+
 /* Boot diagnostics screen (kernel/src/bootinfo.c). */
 extern int boot_mode_uefi;   /* 1 = UEFI, 0 = BIOS */
 void bootinfo_print(void);

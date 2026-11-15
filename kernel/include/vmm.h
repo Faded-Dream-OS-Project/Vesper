@@ -32,6 +32,8 @@ struct limine_executable_address_response;
 #define VMM_KSCRATCH_BASE 0xffff888000000000ull
 
 void vmm_init(u64 hhdm_offset, struct limine_executable_address_response *ea);
+u64  vmm_hhdm_offset(void);
+int  vmm_set_leaf_flags(u64 virt, u64 flags);   /* OR flags into leaf PTE */
 
 /* Physical address -> HHDM virtual address (bootloader-provided map). */
 u64 vmm_phys_to_hhdm(u64 paddr);

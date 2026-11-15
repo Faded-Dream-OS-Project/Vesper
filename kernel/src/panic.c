@@ -45,7 +45,7 @@ void panic(const char *fmt, ...)
     kprintf("RIP=%#lx\n", rip);
     unwind_stack();
     kprintf("$Rsystem halted.$T\n");
-
+    fb_flush();   /* never lose the panic to a pending dirty batch */
     cli();
     for (;;)
         halt();

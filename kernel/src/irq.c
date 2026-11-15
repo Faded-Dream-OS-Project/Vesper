@@ -33,6 +33,7 @@ void timer_irq(struct int_frame *frame)
 {
     (void)frame;
     timer_tick();
+    fb_tick();   /* ~30 Hz shadow-buffer flush cadence (session 6) */
     /* EOI FIRST: the timer vector leaves service so the next tick can
        reach whichever task runs next. Preemption itself moved to the
        outermost-dispatch tail in irq_dispatch (nested-safe). */

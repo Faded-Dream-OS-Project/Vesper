@@ -20,6 +20,9 @@ u64  timer_ticks(void);      /* ticks since timer start */
 u64  timer_uptime_ms(void);
 void timer_sleep_ms(u64 ms); /* busy-sleep; needs interrupts ON */
 u64  timer_lapic_freq(void);
-int  timer_is_degraded(void);   /* 1 = fixed assumed bus clock */ /* calibrated LAPIC bus frequency (Hz) */
+int  timer_is_degraded(void);   /* 1 = fixed assumed bus clock */
+u64  timer_tsc_hz(void);        /* TSC frequency (0 = unknown) */
+u64  timer_boot_ms(void);       /* milliseconds since kmain start (TSC) */
+void timer_boot_start(void);    /* call once at kmain entry */ /* calibrated LAPIC bus frequency (Hz) */
 
 #endif /* VESPER_TIMER_H */

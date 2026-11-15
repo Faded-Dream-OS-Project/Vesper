@@ -5,24 +5,35 @@
 
 #include <common.h>
 #include <console.h>
+#include <heap.h>
 #include <lib.h>
 #include <limine.h>
 #include <stdbool.h>
+#include <timer.h>
+#include <vmm.h>
 
-/* Framebuffer text console.
+/* Framebuffer text console with a RAM shadow buffer (session 6).
 
-   Design notes (docs/REAL_HARDWARE.md summarizes the user-visible
-   behaviour):
+   The first real-hardware run showed pixel-by-pixel drawing to video
+   RAM is unusably slow on real machines (lines sweeping down visibly,
+   boot taking minutes). Redesign:
+
    - Works with any Limine pixel format: bpp 15/16/24/32 and
-     pitch >= width*bpp/8. Colours are composed through the
-     red/green/blue mask size+shift the bootloader reports (defaults:
-     32bpp RGB888 positions).
+     pitch >= width*bpp/8; colours composed through the reported mask
+     sizes/shifts (defaults: 32bpp RGB888 positions).
+   - All glyph drawing and scrolling happen in a RAM shadow buffer the
+     size of one screen, in the framebuffer's native format and pitch
+     (so a flush is a plain row copy). Scrolling is one memmove in
+     RAM; the framebuffer itself is NEVER read.
+   - Only dirty rows are flushed, with wide (u64) stores; flushes
+     happen on newline, on a ~30 Hz tick, and always at panic.
+   - The framebuffer region is re-mapped write-combining via PAT
+     (entry 1 = WC + PWT leaf bit) when the page tables allow it, so
+     full-screen flushes stream instead of stalling.
    - Pixel integer scaling (2x/3x/4x) keeps text readable on
-     high-resolution panels; scale is chosen from the panel height.
-   - Every glyph is drawn with the current foreground colour, so
-     PASS/FAIL/info lines can be colourised on the fly.
-   - Scrolling keeps the last screenful of results on screen; boot
-     never clears the console afterwards. */
+     high-resolution panels; PASS/FAIL/info lines are colourised.
+   - 'quiet' cmdline flag: no rendering at all (serial only) so the
+     cost of rendering can be compared. */
 
 #define TAB_WIDTH 8
 
@@ -33,8 +44,9 @@
    stored as one byte per row (MSB = leftmost pixel). Origin:
    designed from scratch for this kernel in session 2 and extended in
    session 5; deliberately NOT derived from IBM VGA fonts or any
-   third-party glyph set, so no licence can attach to
-   it. Covers ASCII 0x20..0x7E (95 glyphs). */
+   third-party glyph set, so no licence can attach to it. Covers
+   ASCII 0x20..0x7E (95 glyphs); other bytes render the visible
+   fallback glyph (hollow box) so non-ASCII junk is obvious. */
 static const u8 font8x16[95][16] = {
     /* ' ' */ {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0},
     /* '!' */ {0,0,0,18,18,18,18,18,18,0,18,18,0,0,0,0},
@@ -47,7 +59,7 @@ static const u8 font8x16[95][16] = {
     /* '(' */ {0,0,3,6,12,24,24,24,24,24,12,6,3,0,0,0},
     /* ')' */ {0,0,48,24,12,6,6,6,6,6,12,24,48,0,0,0},
     /* '*' */ {0,0,0,0,36,36,126,126,36,36,0,0,0,0,0,0},
-    /* '+' */ {0,0,0,0,0,8,8,62,62,8,8,0,0,0,0,0},
+    /* '+' */ {0,0,0,0,0,8,8,62,62,8,8,0,0,0,0},
     /* ',' */ {0,0,0,0,0,0,0,0,0,24,24,24,48,0,0,0},
     /* '-' */ {0,0,0,0,0,0,0,126,126,0,0,0,0,0,0,0},
     /* '.' */ {0,0,0,0,0,0,0,0,0,0,24,24,0,0,0,0},
@@ -133,6 +145,12 @@ static const u8 font8x16[95][16] = {
     /* '~' */ {0,0,0,0,0,0,110,219,0,0,0,0,0,0,0,0},
 };
 
+/* Fallback glyph for non-ASCII input: a hollow box (visible, not a
+   '?'), so unprintable bytes are obvious on screen. */
+static const u8 fallback_glyph[16] = {
+    0,126,66,66,66,66,66,66,66,66,66,66,66,126,0,0,
+};
+
 /* ---- colours (8-bit RGB components) ---- */
 
 enum {
@@ -159,12 +177,40 @@ static u8 b_size = 8, b_shift = 0;
 
 static int fb_enabled = 1;
 
+/* ---- shadow buffer ---- */
+
+/* 4 MiB covers 2560x1600@32bpp exactly; larger panels fall back to
+   serial-only rather than overrunning. */
+#define FB_SHADOW_BYTES (4u << 20)
+#define FB_MAX_H         4096u
+
+static u8 shadow_storage[FB_SHADOW_BYTES] __attribute__((aligned(8)));
+static u8 dirty_storage[FB_MAX_H];
+static u8 *shadow;            /* RAM copy of the whole framebuffer */
+static u8 *fb_hw;             /* WC-mapped framebuffer (or Limine's) */
+static u8 *dirty;             /* per-scanline dirty flags */
+static u64 flush_ms_acc;      /* total ms spent flushing (TSC) */
+static int pat_wc;            /* 1 = WC leaf bits applied */
+
 void fb_console_disable(void) { fb_enabled = 0; }
 void fb_console_enable(void)  { fb_enabled = 1; }
 
 bool fb_present(void)
 {
     return fb != NULL;
+}
+
+u64 fb_flush_ms(void) { return flush_ms_acc; }
+u32 fb_scale(void)    { return scale; }
+int fb_pat_wc(void)   { return pat_wc; }
+u32 fb_width(void)    { return fb ? fb_w : 0; }
+u32 fb_height(void)   { return fb ? fb_h : 0; }
+
+static inline u64 rdtsc64(void)
+{
+    u32 lo, hi;
+    __asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((u64)hi << 32) | lo;
 }
 
 /* Compose a pixel value in the framebuffer's own format from 8-bit RGB
@@ -174,7 +220,6 @@ static u32 compose_rgb(u32 rgb)
     u32 r8 = (rgb >> 16) & 0xFF, g8 = (rgb >> 8) & 0xFF, b8 = rgb & 0xFF;
     u32 rv, gv, bv;
 
-    /* scale 8-bit component into the mask width (left-aligned) */
     if (r_size == 0) {
         r_size = 8; r_shift = 16;
         g_size = 8; g_shift = 8;
@@ -183,7 +228,7 @@ static u32 compose_rgb(u32 rgb)
     if (r_size >= 8)
         rv = r8 >> (r_size - 8);
     else
-        rv = r8 >> (8 - r_size);   /* truncate (approximate) */
+        rv = r8 >> (8 - r_size);
     if (g_size >= 8)
         gv = g8 >> (g_size - 8);
     else
@@ -196,13 +241,10 @@ static u32 compose_rgb(u32 rgb)
     return (rv << r_shift) | (gv << g_shift) | (bv << b_shift);
 }
 
-/* Raw pixel writer for the active format. bpp is trusted to be one of
-   15/16/24/32 (Limine guarantees a supported mode); anything else
-   falls back to 32bpp-like behaviour safely (writes within pitch). */
-static void putpixel_rgb(u32 x, u32 y, u32 rgb)
+/* Pixel writes go to the SHADOW buffer only (native format/pitch). */
+static void putpixel_shadow(u32 x, u32 y, u32 rgb)
 {
-    size_t off = (size_t)y * fb_pitch + (size_t)x * (fb_bpp / 8);
-    u8 *p = (u8 *)fb->address + off;
+    u8 *p = shadow + (size_t)y * fb_pitch + (size_t)x * (fb_bpp / 8);
     u32 v = compose_rgb(rgb);
 
     switch (fb_bpp) {
@@ -217,25 +259,22 @@ static void putpixel_rgb(u32 x, u32 y, u32 rgb)
     case 16:
         *(u16 *)p = (u16)v;
         break;
-    case 15:
-        /* RGB555: recompose 5-5-5 from the 8-bit components */
-        {
-            u32 r8 = (rgb >> 16) & 0xFF, g8 = (rgb >> 8) & 0xFF,
-                b8 = rgb & 0xFF;
-            *(u16 *)p = (u16)(((r8 >> 3) << 10) | ((g8 >> 3) << 5) |
-                              (b8 >> 3));
-        }
+    case 15: {
+        u32 r8 = (rgb >> 16) & 0xFF, g8 = (rgb >> 8) & 0xFF,
+            b8 = rgb & 0xFF;
+        *(u16 *)p = (u16)(((r8 >> 3) << 10) | ((g8 >> 3) << 5) |
+                          (b8 >> 3));
         break;
+    }
     default:
         *(u32 *)p = v;
         break;
     }
 }
 
-static void putpixel_black(u32 x, u32 y)
+static void putpixel_black_shadow(u32 x, u32 y)
 {
-    size_t off = (size_t)y * fb_pitch + (size_t)x * (fb_bpp / 8);
-    u8 *p = (u8 *)fb->address + off;
+    u8 *p = shadow + (size_t)y * fb_pitch + (size_t)x * (fb_bpp / 8);
 
     switch (fb_bpp) {
     case 32:
@@ -254,43 +293,52 @@ static void putpixel_black(u32 x, u32 y)
     }
 }
 
-/* Draw one glyph cell (cursor position in characters) with the given
-   foreground colour, honouring the pixel scale. */
-static void fb_draw_char(u32 cx, u32 cy, char ch, u32 rgb)
+/* ---- dirty tracking + flush ---- */
+
+static inline void mark_dirty(u32 y)
 {
-    if (ch < 0x20 || ch > 0x7E)
-        ch = '?';
+    if (y < fb_h)
+        dirty[y] = 1;
+}
 
-    const u8 *glyph = font8x16[ch - 0x20];
-    u32 bx = cx * FB_FONT_W * scale;
-    u32 by = cy * FB_FONT_H * scale;
+/* Copy one scanline shadow -> hardware with wide (u64) stores; only
+   the in-screen part of the pitch row is copied. */
+static void flush_row(u32 y)
+{
+    size_t bytes = (size_t)fb_w * (fb_bpp / 8);
+    const u64 *src = (const u64 *)(shadow + (size_t)y * fb_pitch);
+    u64 *dst = (u64 *)(fb_hw + (size_t)y * fb_pitch);
+    size_t n = bytes / 8, i;
 
-    for (u32 r = 0; r < FB_FONT_H; r++) {
-        u8 bits = glyph[r];
-        for (u32 c = 0; c < FB_FONT_W; c++) {
-            u32 on = (bits & (0x80u >> c)) != 0;
-            if (scale == 1) {
-                if (on)
-                    putpixel_rgb(bx + c, by + r, rgb);
-                else
-                    putpixel_black(bx + c, by + r);
-            } else {
-                for (u32 sy = 0; sy < scale; sy++) {
-                    for (u32 sx = 0; sx < scale; sx++) {
-                        u32 x = bx + c * scale + sx;
-                        u32 y = by + r * scale + sy;
-                        if (on)
-                            putpixel_rgb(x, y, rgb);
-                        else
-                            putpixel_black(x, y);
-                    }
-                }
-            }
-        }
+    for (i = 0; i < n; i++)
+        dst[i] = src[i];
+    {
+        const u8 *s8 = (const u8 *)(src + n);
+        u8 *d8 = (u8 *)(dst + n);
+        for (size_t k = 0; k < bytes % 8; k++)
+            d8[k] = s8[k];
     }
 }
 
-/* Hardware cursor: invert a thin bar under the cursor cell. */
+/* Flush all dirty rows (newline / 30 Hz tick / panic call this). */
+void fb_flush(void)
+{
+    if (!shadow || !fb_enabled)
+        return;
+
+    u64 t0 = rdtsc64();
+    for (u32 y = 0; y < fb_h; y++) {
+        if (dirty[y]) {
+            flush_row(y);
+            dirty[y] = 0;
+        }
+    }
+    u64 hz = timer_tsc_hz();
+    if (hz)
+        flush_ms_acc += (rdtsc64() - t0) / (hz / 1000);
+}
+
+/* Hardware cursor: solid bar under the cursor cell (shadow + dirty). */
 static void fb_cursor_on(void)
 {
     u32 bx = cur_x * FB_FONT_W * scale;
@@ -301,24 +349,91 @@ static void fb_cursor_on(void)
     for (u32 r = 0; r < bar_h; r++) {
         for (u32 c = 0; c < FB_FONT_W * scale; c++) {
             u32 x = bx + c, y = bar_y + r;
-            if (x < fb_w && y < fb_h)
-                putpixel_rgb(x, y, RGB_TEXT);
+            if (x < fb_w && y < fb_h) {
+                putpixel_shadow(x, y, RGB_TEXT);
+                mark_dirty(y);
+            }
         }
     }
 }
 
+/* Draw one glyph cell into the shadow buffer. */
+static void fb_draw_char(u32 cx, u32 cy, char ch, u32 rgb)
+{
+    const u8 *glyph;
+    if (ch >= 0x20 && ch <= 0x7E)
+        glyph = font8x16[ch - 0x20];
+    else
+        glyph = fallback_glyph;   /* visible box, not '?' */
+    u32 bx = cx * FB_FONT_W * scale;
+    u32 by = cy * FB_FONT_H * scale;
+
+    for (u32 r = 0; r < FB_FONT_H; r++) {
+        u8 bits = glyph[r];
+        u32 y = by + r * scale;
+        for (u32 c = 0; c < FB_FONT_W; c++) {
+            u32 on = (bits & (0x80u >> c)) != 0;
+            for (u32 sy = 0; sy < scale; sy++) {
+                for (u32 sx = 0; sx < scale; sx++) {
+                    u32 x = bx + c * scale + sx;
+                    u32 yy = y + sy;
+                    if (x < fb_w && yy < fb_h) {
+                        if (on)
+                            putpixel_shadow(x, yy, rgb);
+                        else
+                            putpixel_black_shadow(x, yy);
+                    }
+                }
+            }
+        }
+        for (u32 sy = 0; sy < scale && y + sy < fb_h; sy++)
+            mark_dirty(y + sy);
+    }
+}
+
+/* Scroll the shadow buffer by one text row (memmove in RAM). */
 static void fb_scroll_1(void)
 {
-    if (!fb)
+    if (!shadow)
         return;
-    u8 *base = (u8 *)fb->address;
     size_t row_bytes = (size_t)fb_pitch * FB_FONT_H * scale;
 
     if (row_bytes >= (size_t)fb_pitch * fb_h)
         return;   /* single text row: nothing to scroll */
-    memmove(base, base + row_bytes,
+    memmove(shadow, shadow + row_bytes,
             (size_t)fb_pitch * fb_h - row_bytes);
-    memset(base + (size_t)fb_pitch * fb_h - row_bytes, 0, row_bytes);
+    memset(shadow + (size_t)fb_pitch * fb_h - row_bytes, 0, row_bytes);
+    memset(dirty, 1, fb_h);   /* everything shifted: flush all */
+}
+
+/* ---- write-combining mapping ---- */
+
+/* PAT entry 1 -> WC, then set the PWT bit on the framebuffer leaf
+   entries (PWT selects PAT index 1 on PTEs without the PAT bit). If
+   the page-table walk cannot find the leaves (unexpected layout), we
+   silently keep the Limine mapping — correctness first, WC is an
+   optimization. */
+#define PAT_MSR     0x277u
+#define PWT_FLAG    0x08ull
+
+static void map_fb_write_combining(void)
+{
+    /* PAT entry 1 (bits 15:8) = WC (0x01); leave entry 0 = WB. */
+    u64 pat = read_msr(PAT_MSR);
+    write_msr(PAT_MSR, (pat & ~0xFF00ull) | (0x01ull << 8));
+
+    u64 fb_phys = (u64)fb->address - vmm_hhdm_offset();
+    u64 fb_bytes = (u64)fb_pitch * fb_h;
+    u64 first = fb_phys & ~0xFFFull;
+    u64 last = (fb_phys + fb_bytes + 0xFFF) & ~0xFFFull;
+
+    int any = 0;
+    for (u64 p = first; p < last; p += 0x1000) {
+        u64 virt = vmm_hhdm_offset() + p;
+        if (vmm_set_leaf_flags(virt, PWT_FLAG) == 0)
+            any = 1;
+    }
+    pat_wc = any;
 }
 
 void fb_init(struct limine_framebuffer *framebuffer)
@@ -337,7 +452,7 @@ void fb_init(struct limine_framebuffer *framebuffer)
         fb_pitch = fb_w * (fb_bpp / 8);   /* defensive */
 
     /* Pixel scale so text stays readable on big panels: aim for at
-       least ~28 text rows; 1080p+ gets 2x, 4K gets 3-4x. */
+       least ~30 text rows; 1080p+ gets 2x, 4K gets 3-4x. */
     scale = 1;
     while (scale < 4 &&
            fb_h / (FB_FONT_H * (scale + 1)) >= 30 &&
@@ -361,16 +476,39 @@ void fb_init(struct limine_framebuffer *framebuffer)
         b_shift = framebuffer->blue_mask_shift;
     }
 
+    /* Shadow buffer: one full screen in native format/pitch. A static
+       .bss block (zeroed by the bootloader) — the heap is NOT up when
+       the console initialises, and 4 MiB of static space is cheaper
+       than re-ordering the whole boot. */
+    {
+        u64 bytes = (u64)fb_pitch * fb_h;
+        if (bytes > sizeof(shadow_storage) || fb_h > FB_MAX_H) {
+            shadow = NULL;   /* panel larger than budget: serial-only */
+            fb = NULL;
+            return;
+        }
+        shadow = shadow_storage;
+        dirty = dirty_storage;
+        memset(shadow, 0, bytes);
+        memset(dirty, 1, fb_h);
+    }
+
+    /* Video memory: WC mapping when possible, else the Limine
+       mapping as-is. */
+    fb_hw = (u8 *)fb->address;
+    map_fb_write_combining();
+
     fb_clear();
+    fb_flush();
 }
 
 void fb_clear(void)
 {
     if (!fb)
         return;
-    for (u32 y = 0; y < fb_h; y++) {
-        u8 *line = (u8 *)fb->address + (size_t)y * fb_pitch;
-        memset(line, 0, (size_t)fb_w * (fb_bpp / 8));
+    if (shadow) {
+        memset(shadow, 0, (size_t)fb_pitch * fb_h);
+        memset(dirty, 1, fb_h);
     }
     cur_x = 0;
     cur_y = 0;
@@ -400,6 +538,24 @@ u32 fb_get_color(void)
     return FB_COLOR_TEXT;
 }
 
+/* ~30 Hz auto-flush so partial lines appear promptly even without a
+   newline; newline itself flushes immediately. */
+static u64 last_flush_tsc;
+
+void fb_tick(void)
+{
+    if (!shadow || !fb_enabled)
+        return;
+    u64 hz = timer_tsc_hz();
+    if (!hz)
+        return;   /* no clock yet: newline flushes only */
+    u64 now = rdtsc64();
+    if (now - last_flush_tsc > hz / 30) {
+        last_flush_tsc = now;
+        fb_flush();
+    }
+}
+
 void fb_putc(char c)
 {
     if (!fb_enabled || !fb)
@@ -408,6 +564,7 @@ void fb_putc(char c)
     if (c == '\n') {
         cur_x = 0;
         cur_y++;
+        fb_flush();          /* complete line: push it out now */
     } else if (c == '\r') {
         cur_x = 0;
     } else if (c == '\t') {

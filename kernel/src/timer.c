@@ -33,6 +33,7 @@ static volatile u64 ticks;
 static u64 lapic_bus_hz;
 static u64 period_count;
 static int timer_degraded;
+static u64 boot_tsc;   /* TSC at kmain entry (set by timer_boot_start) */
 
 int timer_is_degraded(void)
 {
@@ -85,6 +86,20 @@ static int pit_out_pin(void)
 
 /* Compute the LAPIC frequency by measuring elapsed LAPIC ticks during
    a fixed PIT one-shot window. Returns Hz. */
+static u64 tsc_hz;   /* measured during the PIT window (0 = unknown) */
+
+u64 timer_tsc_hz(void)
+{
+    return tsc_hz;
+}
+
+static inline u64 rdtsc(void)
+{
+    u32 lo, hi;
+    __asm__ volatile ("rdtsc" : "=a"(lo), "=d"(hi));
+    return ((u64)hi << 32) | lo;
+}
+
 static u64 calibrate(void)
 {
     const u64 lapic_initial = 0xFFFFFFFF;
@@ -93,6 +108,7 @@ static u64 calibrate(void)
     lapic_set_timer(0, 1, lapic_initial);   /* vector 0, masked */
 
     /* 10 ms window: 1193182 / 100 = 11932 PIT ticks. */
+    u64 tsc0 = rdtsc();
     pit_one_shot(11932);
 
     /* Wait for the one-shot OUT pin to go high. */
@@ -101,6 +117,7 @@ static u64 calibrate(void)
         if (++spins > 400000000ull)
             return 0;   /* PIT not behaving; bail out */
     }
+    tsc_hz = (rdtsc() - tsc0) * 100;   /* 10 ms window -> Hz */
 
     u32 ccr = (u32)lapic_read_ccr();
     u64 elapsed = lapic_initial - ccr;   /* ticks in 10 ms (x16 div) */
@@ -247,4 +264,16 @@ void timer_sleep_ms(u64 ms)
     u64 target = timer_ticks() + ms * TIMER_HZ / 1000;
     while (timer_ticks() < target)
         halt();   /* wait for interrupts; each tick wakes us */
+}
+
+void timer_boot_start(void)
+{
+    boot_tsc = rdtsc();
+}
+
+u64 timer_boot_ms(void)
+{
+    if (!tsc_hz || !boot_tsc)
+        return 0;
+    return (rdtsc() - boot_tsc) / (tsc_hz / 1000);
 }

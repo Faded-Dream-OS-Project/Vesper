@@ -229,6 +229,25 @@ int vmm_unmap(u64 virt)
     return 0;
 }
 
+u64 vmm_hhdm_offset(void)
+{
+    return hhdm;
+}
+
+/* OR extra flags into the LEAF (PTE) entry of an existing mapping.
+   Returns 0 if the leaf exists (and was patched), -1 otherwise. Used
+   by the framebuffer console to select a PAT entry via the PWT bit. */
+int vmm_set_leaf_flags(u64 virt, u64 flags)
+{
+    u64 pml4 = read_cr3() & 0x000FFFFFFFFFF000ull;
+    u64 *e = walk(pml4, virt, 0);
+    if (!e || !(*e & VMM_PRESENT))
+        return -1;
+    *e |= flags;
+    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
+    return 0;
+}
+
 int vmm_mapped(u64 virt, u64 *phys_out)
 {
     u64 pml4 = read_cr3() & 0x000FFFFFFFFFF000ull;

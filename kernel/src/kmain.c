@@ -181,12 +181,17 @@ void kmain(void)
        and emulation bits differ wildly across vendors (session 6). */
     cpu_sanitize();
 
+    /* TSC boot clock starts with the first instruction we own. */
+    timer_boot_start();
+
     serial_init();
 
     struct limine_framebuffer_response *fb_response =
         framebuffer_request.response;
     if (fb_response && fb_response->framebuffer_count > 0)
         fb_init(fb_response->framebuffers[0]);
+    if (cmdline_has("quiet"))
+        fb_console_disable();   /* render nothing: measure the cost */
 
     kprintf("\n");
     kprintf("Vesper " VESPER_VERSION " (kernel of Faded Dream OS)\n");
@@ -584,15 +589,28 @@ void kmain(void)
             halt();
     }
 
-    kprintf("M2 self-test: raising divide-by-zero...\n");
-    {
+    /* Deliberate kernel-mode divide-by-zero ONLY on request (the
+       normal boot used to end in it, which made every boot look like
+       a crash on real hardware). */
+    if (cmdline_has("panic_test")) {
+        kprintf("panic_test: raising divide-by-zero...\n");
         volatile u64 num = 1, denom = 0;
         __asm__ volatile ("divq %2" : "+a"(num) : "d"(num), "m"(denom));
     }
 
-    kprintf("M1: serial and framebuffer console online.\n");
-    kprintf("Halting.\n");
+    /* Normal end of boot: green banner, timing summary, then sleep. */
+    kprintf("\n");
+    kprintf("$P=== Vesper boot complete ===$T\n");
+    kprintf("boot: %lu ms total, console flushes took %lu ms "
+            "(scale %lux, fb %lux%lu, %s, PAT-WC %s)\n",
+            (unsigned long)timer_boot_ms(),
+            (unsigned long)fb_flush_ms(),
+            (unsigned long)fb_scale(),
+            (unsigned long)fb_width(), (unsigned long)fb_height(),
+            fb_present() ? "fb ok" : "serial-only",
+            fb_pat_wc() ? "yes" : "no");
+    fb_flush();
 
     for (;;)
-        halt();
+        halt();   /* idle sleeps; screen keeps the results */
 }
