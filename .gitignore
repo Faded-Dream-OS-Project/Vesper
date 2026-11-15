@@ -1,7 +1,5 @@
+vesper.img
+vesper.iso
+vesper.elf
+vesper.img.uninstall
 build/
-*.o
-*.elf
-*.iso
-*.img
-*.log
-thirdparty/limine/limine
