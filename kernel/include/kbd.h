@@ -14,7 +14,8 @@
 
 #define KBD_IRQ_VECTOR 0x21   /* timer is 0x30; IRQ1 mapped to 0x21 */
 
-void kbd_init(void);          /* PS/2 controller + IOAPIC routing */
+void kbd_init(void);
+int  kbd_available(void);   /* 0 = no PS/2 controller */          /* PS/2 controller + IOAPIC routing */
 void kbd_irq(void);           /* called from irq_dispatch for 0x21 */
 int  kbd_getchar(void);       /* -1 if empty; else decoded ASCII */
 u32  kbd_event_count(void);   /* scancodes handled (self-test) */

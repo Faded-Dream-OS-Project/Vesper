@@ -270,11 +270,14 @@ void kmain(void)
     kprintf("timer: LAPIC timer calibrated (%lu Hz bus), %lu Hz tick\n",
             (unsigned long)timer_lapic_freq(), (unsigned long)TIMER_HZ);
 
-    /* PS/2 keyboard via the IOAPIC (GSI 1 -> vector 0x21). */
+    /* PS/2 keyboard via the IOAPIC (IRQ1 -> its MADT override GSI ->
+       vector 0x21); absent controllers are not fatal. */
     kbd_init();
     irq_install(KBD_IRQ_VECTOR, kbd_irq_entry);
-    kprintf("kbd: PS/2 init done, GSI 1 -> vector %#x\n",
-            (unsigned int)KBD_IRQ_VECTOR);
+    if (kbd_available())
+        kprintf("kbd: PS/2 init done, IRQ1 -> GSI %lu -> vector %#x\n",
+                (unsigned long)isa_irq_to_gsi(1),
+                (unsigned)KBD_IRQ_VECTOR);
 
     /* Enable interrupts. */
     sti();

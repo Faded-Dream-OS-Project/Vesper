@@ -5,15 +5,19 @@
 
 #include <common.h>
 #include <apic.h>
+#include <console.h>
 #include <io.h>
 #include <kbd.h>
 
 /* PS/2 keyboard driver, scancode set 1.
 
-   The controller (port 0x64) is initialised defensively: flush the
-   output buffer, enable the first port, and only then unmask GSI 1 in
-   the IOAPIC. Decoding keeps per-key shift state and a sticky caps
-   lock; characters land in a ring buffer. */
+   The i8042 controller is PROBED with bounded waits before anything
+   else: on machines without a PS/2 controller (most modern laptops)
+   the status port reads 0xFF forever and an unbounded wait would hang
+   boot. If the controller does not pass its self-test we print
+   'kbd: not available' and continue without a keyboard. Decoding
+   keeps per-key shift state and a sticky caps lock; characters land
+   in a ring buffer. */
 
 #define KBD_DATA 0x60
 #define KBD_STAT 0x64
@@ -28,6 +32,7 @@ static volatile u32 ring_tail;   /* reader index */
 static int shift_down;
 static int caps_lock;
 static volatile u32 events;
+static int kbd_ok;   /* controller passed the probe and was init'd */
 
 /* Scancode set 1: index = make scancode, value = ASCII (0 = none).
    Unshifted table; shifted variants handled below. */
@@ -115,12 +120,67 @@ u32 kbd_event_count(void)
     return events;
 }
 
+/* Bounded wait for a status-bit condition. Real hardware answers in
+   microseconds; 2M spins covers slow firmware without ever hanging. */
+static int wait_stat(u8 mask, u8 want)
+{
+    for (u32 i = 0; i < 2000000u; i++) {
+        if ((inb(KBD_STAT) & mask) == want)
+            return 1;
+    }
+    return 0;
+}
+
+/* Probe the i8042: input-buffer empty + self-test 0x55. Returns 0 when
+   the controller is usable. */
+static int i8042_probe(void)
+{
+    u8 stat = inb(KBD_STAT);
+
+    /* Absent controllers float the bus: status 0xFF or 0x00. */
+    if (stat == 0xFF || stat == 0x00)
+        return -1;
+
+    /* Controller self-test. */
+    if (!wait_stat(0x02, 0))          /* input buffer must be empty */
+        return -1;
+    outb(KBD_CMD, 0xAA);
+    if (!wait_stat(0x01, 0x01))       /* wait for a response byte */
+        return -1;
+    if (inb(KBD_DATA) != 0x55)
+        return -1;
+
+    return 0;
+}
+
+int kbd_available(void)
+{
+    return kbd_ok;
+}
+
 void kbd_init(void)
 {
     shift_down = 0;
     caps_lock = 0;
     ring_head = ring_tail = 0;
     events = 0;
+
+    /* test hook: simulate an absent controller (QEMU always emulates
+       the i8042 ports, so the probe cannot fail there) */
+    {
+        extern int cmdline_has(const char *flag);
+        if (cmdline_has("kbd_test_absent")) {
+            kprintf("$Wkbd: not available (no PS/2 controller response)$T\n");
+            return;
+        }
+    }
+
+    if (i8042_probe() != 0) {
+        kprintf("$Wkbd: not available (no PS/2 controller response)$T\n");
+        kbd_ok = 0;
+        return;
+    }
+    kbd_ok = 1;
 
     /* Flush anything the controller already holds. */
     while (inb(KBD_STAT) & 0x01)
