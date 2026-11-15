@@ -154,7 +154,7 @@ void m5_overflow_thread(void *arg)
 
 /* Kernel command line flag: does the boot cmdline contain 'flag'
    as a whitespace-separated token? (limine.conf 'cmdline: ...') */
-static int cmdline_has(const char *flag)
+int cmdline_has(const char *flag)
 {
     if (!cmdline_request.response || !cmdline_request.response->cmdline)
         return 0;

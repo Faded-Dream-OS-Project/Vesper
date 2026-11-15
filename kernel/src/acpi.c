@@ -122,8 +122,21 @@ int acpi_init(void *rsdp_virt)
             continue;                 /* bad checksum: skip entry */
         if (memcmp(tbl->signature, "APIC", 4) == 0 && !madt)
             madt = tbl;
-        else if (memcmp(tbl->signature, "HPET", 4) == 0)
+        else if (memcmp(tbl->signature, "HPET", 4) == 0) {
             info.has_hpet = 1;
+            /* HPET table: header (36 bytes), Event Timer Block ID (4),
+               then a Generic Address Structure for the base: space id,
+               bit width, bit offset, reserved, and the 64-bit address
+               at table offset +44 (NOT +40 — +40 is the GAS space-id
+               byte; reading the whole GAS as the address produced
+               garbage and a #GP in the HPET fallback). */
+            u64 base = 0;
+            u8 space = *(u8 *)((u8 *)tbl + 40);
+            if (space == 0)   /* system memory */
+                base = *(u64 *)((u8 *)tbl + 44);
+            if (base & 0xFFFFFFFFFFF00000ull)   /* plausible MMIO */
+                info.hpet_base = base & ~0xFFFull;
+        }
         else if (memcmp(tbl->signature, "FACP", 4) == 0)
             info.has_fadt = 1;
         else if (memcmp(tbl->signature, "MCFG", 4) == 0)

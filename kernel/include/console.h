@@ -46,6 +46,9 @@ u32  fb_get_color(void);
 extern int boot_mode_uefi;   /* 1 = UEFI, 0 = BIOS */
 void bootinfo_print(void);
 
+/* Kernel cmdline token check (kernel/src/kmain.c). */
+int cmdline_has(const char *flag);
+
 /* Minimal printf-style formatting (subset: %s %c %d %u %x %p %% and
    width/zero padding like %08x). */
 void kvprintf(const char *fmt, va_list args)

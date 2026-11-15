@@ -19,6 +19,7 @@ void timer_tick(void);       /* called from the IRQ path on each tick */
 u64  timer_ticks(void);      /* ticks since timer start */
 u64  timer_uptime_ms(void);
 void timer_sleep_ms(u64 ms); /* busy-sleep; needs interrupts ON */
-u64  timer_lapic_freq(void); /* calibrated LAPIC bus frequency (Hz) */
+u64  timer_lapic_freq(void);
+int  timer_is_degraded(void);   /* 1 = fixed assumed bus clock */ /* calibrated LAPIC bus frequency (Hz) */
 
 #endif /* VESPER_TIMER_H */

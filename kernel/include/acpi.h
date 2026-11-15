@@ -45,6 +45,7 @@ struct acpi_info {
     int  xsdt_used;       /* 1 = XSDT, 0 = RSDT */
     u32 root_entries;     /* tables listed by the root */
     int  has_hpet, has_fadt, has_mcfg;
+    u64 hpet_base;        /* HPET MMIO base (0 if absent) */
 
     struct acpi_ioapic ioapics[ACPI_MAX_IOAPICS];
     u32 n_ioapics;
