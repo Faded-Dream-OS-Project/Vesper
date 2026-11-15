@@ -9,6 +9,8 @@
 #include <idt.h>
 #include <lib.h>
 #include <limine.h>
+#include <pmm.h>
+#include <selftest.h>
 
 /* ---- Limine requests ----
    Marked sections bracket the request block; the bootloader scans it
@@ -106,6 +108,36 @@ void kmain(void)
     kprintf("GDT/TSS loaded.\n");
     idt_init();
     kprintf("IDT loaded (256 gates).\n");
+
+    /* ---- Milestone 3 ---- */
+    pmm_init(mm, hhdm_request.response->offset);
+    kprintf("PMM: %lu/%lu frames free (%lu MiB RAM tracked)\n",
+            pmm_free_frames(), pmm_total_usable_frames(),
+            pmm_total_usable_frames() >> 8);
+
+    /* M3 PMM self-test. */
+    {
+        struct test_ctx t;
+        u64 f1, f2;
+        u64 before = pmm_free_frames();
+
+        test_begin(&t, "pmm");
+        f1 = pmm_alloc();
+        test_check(&t, "alloc returns nonzero", f1 != 0);
+        test_check(&t, "alloc is page aligned", (f1 & 0xFFF) == 0);
+        test_check(&t, "free count drops by 1",
+                   pmm_free_frames() == before - 1);
+        f2 = pmm_alloc();
+        test_check(&t, "second alloc differs", f2 != f1 && f2 != 0);
+        pmm_free(f1);
+        test_check(&t, "free restores count",
+                   pmm_free_frames() == before - 1);
+        pmm_free(f2);
+        test_check(&t, "second free restores count",
+                   pmm_free_frames() == before);
+        test_summary(&t);
+    }
+
     kprintf("M2 self-test: raising divide-by-zero...\n");
     {
         volatile u64 num = 1, denom = 0;
