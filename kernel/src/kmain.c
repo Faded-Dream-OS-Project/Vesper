@@ -11,6 +11,7 @@
 #include <acpi.h>
 #include <apic.h>
 #include <irq.h>
+#include <kbd.h>
 #include <limine.h>
 #include <pic.h>
 #include <pmm.h>
@@ -169,6 +170,12 @@ void kmain(void)
     kprintf("timer: LAPIC timer calibrated (%lu Hz bus), %lu Hz tick\n",
             (unsigned long)timer_lapic_freq(), (unsigned long)TIMER_HZ);
 
+    /* PS/2 keyboard via the IOAPIC (GSI 1 -> vector 0x21). */
+    kbd_init();
+    irq_install(KBD_IRQ_VECTOR, kbd_irq_entry);
+    kprintf("kbd: PS/2 init done, GSI 1 -> vector %#x\n",
+            (unsigned int)KBD_IRQ_VECTOR);
+
     /* Enable interrupts. */
     sti();
     kprintf("interrupts enabled (sti).\n");
@@ -302,6 +309,33 @@ void kmain(void)
             test_check(&t, "timer still ticking after sleep",
                        timer_ticks() > before);
         }
+        test_summary(&t);
+    }
+
+    {
+        struct test_ctx t;
+        char got[8];
+        int n = 0;
+
+        test_begin(&t, "kbd");
+        /* Window: collect characters for ~2 seconds. The driver echoes
+           each decoded char to serial + framebuffer as it arrives. */
+        kprintf("  (kbd test window: 4s, send keys now)\n");
+        u64 deadline = timer_ticks() + 4 * TIMER_HZ;
+        while (timer_ticks() < deadline) {
+            int c = kbd_getchar();
+            if (c >= 0) {
+                kprintf("key: %c\n", (char)c);
+                if (n < 8)
+                    got[n++] = (char)c;
+            }
+        }
+        /* Automated run (QEMU sendkey): expect h, i, H (shift). */
+        test_check(&t, "received >=3 chars via sendkey", n >= 3);
+        test_check(&t, "first char is 'h'", n >= 1 && got[0] == 'h');
+        test_check(&t, "second char is 'i'", n >= 2 && got[1] == 'i');
+        test_check(&t, "shift decodes to 'H'", n >= 3 && got[2] == 'H');
+        test_check(&t, "scancodes were handled", kbd_event_count() >= 6);
         test_summary(&t);
     }
 

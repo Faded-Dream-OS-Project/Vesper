@@ -7,6 +7,7 @@
 #include <apic.h>
 #include <console.h>
 #include <irq.h>
+#include <kbd.h>
 #include <timer.h>
 
 /* IRQ routing table. Vectors 0x20..0xFF map to handlers; the LAPIC
@@ -29,6 +30,13 @@ void timer_irq(struct int_frame *frame)
 {
     (void)frame;
     timer_tick();
+}
+
+/* PS/2 keyboard entry point (vector 0x21). */
+void kbd_irq_entry(struct int_frame *frame)
+{
+    (void)frame;
+    kbd_irq();
 }
 
 u64 irq_count(void)

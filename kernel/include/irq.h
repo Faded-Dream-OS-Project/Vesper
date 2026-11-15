@@ -21,6 +21,9 @@ int irq_install(u8 vector, irq_handler_t fn);
 /* LAPIC timer tick entry (installed for TIMER_VECTOR). */
 void timer_irq(struct int_frame *frame);
 
+/* PS/2 keyboard entry (installed for KBD_IRQ_VECTOR). */
+void kbd_irq_entry(struct int_frame *frame);
+
 /* Number of interrupts dispatched since boot (self-test evidence). */
 u64 irq_count(void);
 
