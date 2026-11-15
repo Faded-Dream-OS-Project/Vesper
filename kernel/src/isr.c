@@ -106,7 +106,7 @@ void exception_handler(struct int_frame *frame)
     kprintf("\n=== EXCEPTION #%lu (%s) ===\n",
             frame->int_no, exception_name(frame->int_no));
     if (frame->int_no == 14)
-        kprintf("CR2 (fault address): %#lx (task '%s', RSP %#lx — a\n"
+        kprintf("CR2 (fault address): %#lx (task '%s', RSP %#lx - a\n"
                 "  stack pointer below its guard page means a kernel\n"
                 "  thread stack overflow hit the guard page)\n",
                 read_cr2(), sched_current()->name, frame->rsp);

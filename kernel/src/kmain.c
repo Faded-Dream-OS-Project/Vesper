@@ -251,7 +251,7 @@ void kmain(void)
        LAPIC/IOAPIC addresses (x86-64 QEMU always uses ACPI 2.0). */
     if (rsdp_request.response && acpi_init(rsdp_request.response->address) == 0) {
         const struct acpi_info *ai = acpi_get_info();
-        kprintf("ACPI: MADT ok — LAPIC %#lx, IOAPIC %#lx (GSI %lu base), %lu LAPICs\n",
+        kprintf("ACPI: MADT ok - LAPIC %#lx, IOAPIC %#lx (GSI %lu base), %lu LAPICs\n",
                 ai->lapic_base, ai->ioapic_base,
                 (unsigned long)ai->ioapic_gsi_base,
                 (unsigned long)ai->lapic_count);
@@ -274,6 +274,15 @@ void kmain(void)
                kernel is actually running on (session 5). Printed after
                ACPI init so the table data is complete. */
             bootinfo_print();
+            /* 'diagnostics_hold' boot entry: stop HERE with the
+               diagnostics on screen so a human can photograph them
+               (docs/REAL_HARDWARE.md). */
+            if (cmdline_has("diagnostics_hold")) {
+                kprintf("$Iholding: diagnostics on screen, hlt.$T\n");
+                fb_flush();
+                for (;;)
+                    halt();
+            }
         } else {
             kprintf("APIC: unavailable; halting.\n");
             for (;;)
@@ -471,7 +480,7 @@ void kmain(void)
         kthread_create("a", m5_thread_a, 0);
         kthread_create("b", m5_thread_b, 0);
         kthread_create("c", m5_thread_c, 0);
-        kprintf("  (3 busy threads created; they never yield — only\n"
+        kprintf("  (3 busy threads created; they never yield - only\n"
                 "   timer preemption can share the CPU)\n");
 
         /* Idle waits for all three to finish. Note the busy threads

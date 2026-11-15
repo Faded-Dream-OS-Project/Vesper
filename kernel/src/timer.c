@@ -248,7 +248,7 @@ void timer_init(void)
     if (!lapic_bus_hz) {
         timer_degraded = 1;
         lapic_bus_hz = 100000000ull;   /* assume 100 MHz LAPIC bus */
-        kprintf("$Wtimer: all calibrations failed — degraded mode "
+        kprintf("$Wtimer: all calibrations failed - degraded mode "
                 "(assumed 100 MHz bus); timekeeping will drift$T\n");
     }
 
