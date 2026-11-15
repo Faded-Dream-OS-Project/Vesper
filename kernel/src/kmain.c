@@ -22,6 +22,7 @@
 #include <usermode.h>
 #include <vmm.h>
 #include <heap.h>
+#include <breadcrumb.h>
 #include <build_id.h>   /* generated: git hash, compiler, date */
 
 /* ---- Limine requests ----
@@ -178,9 +179,15 @@ int cmdline_has(const char *flag)
 
 void kmain(void)
 {
+    /* Early-boot breadcrumbs start HERE: every init stage pokes a
+       coloured square on the framebuffer + a code to port 0xE9, so a
+       black-screen photo on real hardware shows how far boot got. */
+    breadcrumb_stage(1);   /* entry */
+
     /* Real-firmware CR0/CR4 hygiene BEFORE anything else: SMEP/SMAP
        and emulation bits differ wildly across vendors (session 6). */
     cpu_sanitize();
+    breadcrumb_stage(2);   /* cpu */
 
     /* TSC boot clock starts with the first instruction we own. */
     timer_boot_start();
@@ -189,8 +196,12 @@ void kmain(void)
 
     struct limine_framebuffer_response *fb_response =
         framebuffer_request.response;
-    if (fb_response && fb_response->framebuffer_count > 0)
+    if (fb_response && fb_response->framebuffer_count > 0) {
+        breadcrumb_fb(fb_response->framebuffers[0]);
         fb_init(fb_response->framebuffers[0]);
+    }
+    breadcrumb_stage(3);   /* framebuffer response accepted */
+
     if (cmdline_has("quiet"))
         fb_console_disable();   /* render nothing: measure the cost */
 
@@ -200,6 +211,8 @@ void kmain(void)
        only the early breadcrumbs) identifies the exact build. */
     kprintf("build: git %s, %s, %s\n",
             BUILD_ID_GIT, BUILD_ID_CC, BUILD_ID_STAMP);
+    breadcrumb_stage(4);   /* console live */
+    breadcrumb_handover();   /* squares cleared; console owns screen */
 
     struct limine_bootloader_info_response *bl =
         bootloader_info_request.response;
@@ -230,14 +243,17 @@ void kmain(void)
 
     gdt_init();
     kprintf("GDT/TSS loaded.\n");
+    breadcrumb_stage(5);   /* gdt */
     idt_init();
     kprintf("IDT loaded (256 gates).\n");
+    breadcrumb_stage(6);   /* idt */
 
     /* Milestone 4: interrupt hardware. PIC first: remap + full mask so
        the legacy chips cannot raise spurious vectors while we own the
        APIC path. */
     pic_init();
     kprintf("PIC remapped (0x20-0x2F) and fully masked.\n");
+    breadcrumb_stage(7);   /* pic */
 
     /* ---- Milestone 3 ---- */
     if (cmdline_has("poison"))
@@ -246,11 +262,13 @@ void kmain(void)
     kprintf("PMM: %lu/%lu frames free (%lu MiB RAM tracked)\n",
             pmm_free_frames(), pmm_total_usable_frames(),
             pmm_total_usable_frames() >> 8);
+    breadcrumb_stage(8);   /* pmm */
 
     vmm_init(hhdm_request.response->offset,
              executable_address_request.response);
     kprintf("VMM: own PML4 active at %#llx\n",
             (unsigned long long)(read_cr3() & ~0xFFFull));
+    breadcrumb_stage(9);   /* vmm */
 
     /* ACPI: Limine hands us the RSDP; walk it to the MADT for the
        LAPIC/IOAPIC addresses (x86-64 QEMU always uses ACPI 2.0). */
@@ -263,6 +281,7 @@ void kmain(void)
     } else {
         kprintf("ACPI: MADT unavailable\n");
     }
+    breadcrumb_stage(10);   /* acpi */
 
     /* LAPIC + IOAPIC from the MADT, then the calibrated timer.
        Multi-CPU contract (session 5): the MADT may list any number of
@@ -294,11 +313,13 @@ void kmain(void)
                 halt();
         }
     }
+    breadcrumb_stage(11);   /* apic */
 
     timer_init();
     irq_install(TIMER_VECTOR, timer_irq);
     kprintf("timer: LAPIC timer calibrated (%lu Hz bus), %lu Hz tick\n",
             (unsigned long)timer_lapic_freq(), (unsigned long)TIMER_HZ);
+    breadcrumb_stage(12);   /* timer */
 
     /* PS/2 keyboard via the IOAPIC (IRQ1 -> its MADT override GSI ->
        vector 0x21); absent controllers are not fatal. */
@@ -312,7 +333,6 @@ void kmain(void)
     /* Enable interrupts. */
     sti();
     kprintf("interrupts enabled (sti).\n");
-
 
     /* M3 VMM self-test. */
 
@@ -476,6 +496,7 @@ void kmain(void)
 
     /* ---- Milestone 5: kernel threads (preemption) ---- */
     sched_init();
+    breadcrumb_stage(13);   /* sched */
     kprintf("sched: idle task online (%lu tasks).\n",
             (unsigned long)sched_task_count());
     {
@@ -520,6 +541,7 @@ void kmain(void)
 
     /* ---- Milestone 6: syscalls + user mode + init ---- */
     usermode_init();
+    breadcrumb_stage(14);   /* user */
     kprintf("syscalls: syscall/sysret enabled (write exit yield getpid uptime_ms)\n");
     {
         struct test_ctx t;
@@ -613,6 +635,7 @@ void kmain(void)
     }
 
     /* Normal end of boot: green banner, timing summary, then sleep. */
+    breadcrumb_stage(15);   /* done */
     kprintf("\n");
     kprintf("$P=== Vesper boot complete ===$T\n");
     kprintf("boot: %lu ms total, console flushes took %lu ms "

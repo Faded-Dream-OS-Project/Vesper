@@ -9,6 +9,7 @@
 #include <cpu.h>
 #include <limine.h>
 #include <lib.h>
+#include <breadcrumb.h>
 
 /* Boot diagnostics screen (session 5): one readable block, printed
    after the framebuffer is up, so a human with a camera can capture
@@ -57,6 +58,11 @@ void bootinfo_print(void)
             cpu.vendor, cpu.max_leaf, (unsigned long)cpu.apic_id);
     cpu_flags_str(&cpu, flags, sizeof(flags));
     kprintf("CPUID flags: %s\n", flags[0] ? flags : "(none reported)");
+
+    /* Early-boot breadcrumbs survived on port 0xE9 (and as coloured
+       squares until the console took over): report the last stage. */
+    kprintf("boot stages: %d reached, last code %d (see docs/REAL_HARDWARE.md)\n",
+            breadcrumb_count(), (int)breadcrumb_last());
 
     /* Control registers (post-sanitize; boot_cr4 is the pre state). */
     {
