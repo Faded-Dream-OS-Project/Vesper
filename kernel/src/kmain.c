@@ -34,7 +34,7 @@ static volatile uint64_t limine_requests_start[4] =
     LIMINE_REQUESTS_START_MARKER;
 
 __attribute__((used, section(".limine_requests.2")))
-static struct limine_framebuffer_request framebuffer_request = {
+struct limine_framebuffer_request framebuffer_request = {
     .id = LIMINE_FRAMEBUFFER_REQUEST_ID,
     .revision = 0,
 };
@@ -46,7 +46,7 @@ static struct limine_hhdm_request hhdm_request = {
 };
 
 __attribute__((used, section(".limine_requests.4")))
-static struct limine_memmap_request memmap_request = {
+struct limine_memmap_request memmap_request = {
     .id = LIMINE_MEMMAP_REQUEST_ID,
     .revision = 0,
 };
@@ -64,25 +64,31 @@ static struct limine_executable_cmdline_request cmdline_request = {
 };
 
 __attribute__((used, section(".limine_requests.7")))
+struct limine_firmware_type_request firmware_request = {
+    .id = LIMINE_FIRMWARE_TYPE_REQUEST_ID,
+    .revision = 0,
+};
+
+__attribute__((used, section(".limine_requests.8")))
 static struct limine_stack_size_request stack_size_request = {
     .id = LIMINE_STACK_SIZE_REQUEST_ID,
     .revision = 0,
     .stack_size = 0x10000,   /* 64 KiB */
 };
 
-__attribute__((used, section(".limine_requests.8")))
+__attribute__((used, section(".limine_requests.9")))
 static struct limine_bootloader_info_request bootloader_info_request = {
     .id = LIMINE_BOOTLOADER_INFO_REQUEST_ID,
     .revision = 0,
 };
 
-__attribute__((used, section(".limine_requests.9")))
+__attribute__((used, section(".limine_requests.10")))
 static struct limine_executable_address_request executable_address_request = {
     .id = LIMINE_EXECUTABLE_ADDRESS_REQUEST_ID,
     .revision = 0,
 };
 
-__attribute__((used, section(".limine_requests.10")))
+__attribute__((used, section(".limine_requests.11")))
 static volatile uint64_t limine_requests_end[2] =
     LIMINE_REQUESTS_END_MARKER;
 
@@ -185,6 +191,7 @@ void kmain(void)
     if (bl)
         kprintf("bootloader: %s %s\n", bl->name, bl->version);
 
+
     struct limine_hhdm_response *hhdm = hhdm_request.response;
     if (hhdm)
         kprintf("hhdm offset: %#lx\n", hhdm->offset);
@@ -246,6 +253,11 @@ void kmain(void)
         if (ai->valid) {
             apic_init(ai->lapic_base, ai->ioapic_base, ai->ioapic_gsi_base);
             kprintf("APIC: LAPIC online (spurious vector 0xFF, EOI broadcast).\n");
+
+            /* Real-hardware diagnostics: identity of the machine this
+               kernel is actually running on (session 5). Printed after
+               ACPI init so the table data is complete. */
+            bootinfo_print();
         } else {
             kprintf("APIC: unavailable; halting.\n");
             for (;;)

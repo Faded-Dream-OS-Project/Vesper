@@ -42,6 +42,10 @@ enum fb_color {
 void fb_set_color(u32 color);
 u32  fb_get_color(void);
 
+/* Boot diagnostics screen (kernel/src/bootinfo.c). */
+extern int boot_mode_uefi;   /* 1 = UEFI, 0 = BIOS */
+void bootinfo_print(void);
+
 /* Minimal printf-style formatting (subset: %s %c %d %u %x %p %% and
    width/zero padding like %08x). */
 void kvprintf(const char *fmt, va_list args)

@@ -105,6 +105,7 @@ int acpi_init(void *rsdp_virt)
     }
 
     u64 n_entries = (root->length - sizeof(struct sdt_hdr)) / entry_size;
+    info.root_entries = (u32)n_entries;
     struct sdt_hdr *madt = NULL;
     for (u64 i = 0; i < n_entries; i++) {
         u64 tbl_phys;
@@ -113,13 +114,31 @@ int acpi_init(void *rsdp_virt)
         else
             tbl_phys = *(u32 *)((u8 *)root + sizeof(struct sdt_hdr) + 4 * i);
         struct sdt_hdr *tbl = (struct sdt_hdr *)PHYS_PTR(tbl_phys);
-        if (table_ok(tbl) && memcmp(tbl->signature, "APIC", 4) == 0) {
+        if (!tbl || tbl_phys == 0)
+            continue;                 /* unexpected layout: skip entry */
+        if (tbl->length < sizeof(struct sdt_hdr) || tbl->length > 0x100000)
+            continue;                 /* absurd length: skip entry */
+        if (!table_ok(tbl))
+            continue;                 /* bad checksum: skip entry */
+        if (memcmp(tbl->signature, "APIC", 4) == 0 && !madt)
             madt = tbl;
-            break;
-        }
+        else if (memcmp(tbl->signature, "HPET", 4) == 0)
+            info.has_hpet = 1;
+        else if (memcmp(tbl->signature, "FACP", 4) == 0)
+            info.has_fadt = 1;
+        else if (memcmp(tbl->signature, "MCFG", 4) == 0)
+            info.has_mcfg = 1;
     }
     if (!madt)
         return -1;
+
+    info.rsdp_revision = rsdp->revision;
+    for (int i = 0; i < 6; i++)
+        info.oem_id[i] = rsdp->oem_id[i];
+    info.oem_id[6] = 0;
+    info.xsdt_used = (entry_size == 8);
+    info.xsdt_phys = entry_size == 8 ? rsdp->xsdt_addr : 0;
+    info.rsdt_phys = rsdp->rsdt_addr;
 
     struct madt_hdr *m = (struct madt_hdr *)((u8 *)madt + sizeof(struct sdt_hdr));
     info.lapic_base = m->lapic_addr;
@@ -127,6 +146,8 @@ int acpi_init(void *rsdp_virt)
     info.ioapic_base = 0;
     info.ioapic_gsi_base = 0;
     info.uart_intid = 4;
+    info.n_ioapics = 0;
+    info.n_overrides = 0;
 
     u64 off = sizeof(struct madt_hdr);
     while (off + sizeof(struct madt_entry_hdr) <= madt->length -
@@ -141,15 +162,37 @@ int acpi_init(void *rsdp_virt)
             break;
         case 1: {  /* I/O APIC */
             u8 *p = (u8 *)e;
-            info.ioapic_base   = *(u32 *)(p + 4);
-            info.ioapic_gsi_base = *(u32 *)(p + 8);
+            u64 base = *(u32 *)(p + 4);
+            u32 gsi_base = *(u32 *)(p + 8);
+            if (info.n_ioapics == 0) {   /* first one stays the default */
+                info.ioapic_base = base;
+                info.ioapic_gsi_base = gsi_base;
+            }
+            if (info.n_ioapics < ACPI_MAX_IOAPICS) {
+                /* GSI count is read from the IOAPIC itself (redir
+                   table size) by the APIC layer; 24 slots assumed
+                   here as a conservative diagnostic default. */
+                info.ioapics[info.n_ioapics].mmio_base = base;
+                info.ioapics[info.n_ioapics].gsi_base = gsi_base;
+                info.ioapics[info.n_ioapics].gsi_count = 0;
+                info.n_ioapics++;
+            }
             break;
         }
-        case 2: {  /* Interrupt Source Override */
+        case 2: {  /* Interrupt Source Override:
+                       [type][len][bus][source][gsi:4][flags:2] */
             u8 *p = (u8 *)e;
-            u8 bus = p[4];
-            u8 irq = p[5];
-            u32 gsi = *(u32 *)(p + 8);
+            u8 bus = p[2];
+            u8 irq = p[3];
+            u32 gsi = *(u32 *)(p + 4);
+            u16 flags = *(u16 *)(p + 8);
+            if (info.n_overrides < ACPI_MAX_OVERRIDES) {
+                info.overrides[info.n_overrides].bus = bus;
+                info.overrides[info.n_overrides].source_irq = irq;
+                info.overrides[info.n_overrides].gsi = gsi;
+                info.overrides[info.n_overrides].flags = flags;
+                info.n_overrides++;
+            }
             /* ISA bus 0 overrides: remember which GSI serial IRQ 4
                lands on (QEMU maps ISA IRQs 1:1, but record it). */
             if (bus == 0 && irq == 4)
