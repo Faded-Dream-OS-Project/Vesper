@@ -8,37 +8,37 @@
 #include <lib.h>
 
 /* CPUID discovery for the boot diagnostics screen (session 5) plus
-   early control-register sanitisation for real hardware (session 6):
-   firmware may leave SMEP/SMAP set (we access user memory from ring 0
-   in sys_write — SMAP would fault those accesses) or leave legacy
-   emulation bits in CR0. Print what we found and what we changed. */
+   boot-time control-register snapshots (session 7).
+
+   Session 7 policy change: cpu_sanitize() no longer WRITES CR0/CR4.
+   Writing control registers before the IDT is installed is the
+   riskiest code in the kernel: any #GP (reserved bit, unsupported
+   feature, wrong enable order) is an unrecoverable triple fault, and
+   on real firmware the boot path dies exactly there — black screen,
+   nothing printed. The registers are READ and recorded instead, and
+   the diagnostics screen shows what firmware left behind.
+
+   Consequences handled elsewhere:
+   - SMAP: if firmware left SMAP set, ring-0 user-buffer accesses in
+     sys_write() are wrapped with STAC/CLAC (usermode.c), so no CR4
+     write is needed for correctness.
+   - SMEP: the kernel never executes user pages, so SMEP is harmless.
+   - CR0.EM: left as firmware set it. If EM=1 the FPU is absent or
+     firmware-disabled; Vesper executes no x87/SSE instructions in
+     ring 0 (built with -mno-sse -mno-mmx), so emulation mode cannot
+     fault. The snapshot tells us if this ever changes. */
 
 u64 boot_cr0, boot_cr4, boot_efer;
-int cr4_changed;
+int cr4_changed;   /* always 0 now: no CR4 writes at boot */
 
 void cpu_sanitize(void)
 {
+    /* Read + record only. Nothing here can fault, and the IDT is not
+       installed yet — by design it never needs to be. */
     boot_cr0 = read_cr0();
     boot_cr4 = read_cr4();
     boot_efer = read_msr(0xC0000080u);
-
-    /* CR0: clear emulation (EM) so FPU instructions work if user code
-       ever uses them; keep everything else firmware chose (WP, PG,
-       PE, NE...). */
-    u64 cr0 = boot_cr0 & ~(1ull << 2);           /* EM=0 */
-    __asm__ volatile ("mov %0, %%cr0" : : "r"(cr0) : "memory");
-
-    /* CR4: clear SMEP (bit 20) / SMAP (bit 21) — the kernel reads and
-       writes user buffers from ring 0. Keep OSFXSR/OSXMMEXCPT (bit
-       9/10) as firmware set them; set them if absent so SSE state is
-       usable. Also clear PGE? no — keep. */
-    u64 cr4 = boot_cr4 & ~((1ull << 20) | (1ull << 21));
-    cr4 |= (1ull << 9) | (1ull << 10);           /* OSFXSR, OSXMMEXCPT */
-    cr4_changed = (cr4 != boot_cr4);
-    write_cr4(cr4);
-
-    /* EFER.NXE is enabled by usermode_init later; nothing to do here.
-       Cache the post state for the diagnostics print. */
+    cr4_changed = 0;
 }
 
 void cpu_identify(struct cpu_info *c)

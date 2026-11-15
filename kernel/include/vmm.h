@@ -31,9 +31,17 @@ struct limine_executable_address_response;
 /* Kernel scratch area for mappings (below HHDM, above user space). */
 #define VMM_KSCRATCH_BASE 0xffff888000000000ull
 
+/* Dedicated write-combining window for the framebuffer (session 7):
+   4 KiB PTEs created by vmm_map_wc() with PWT set (=> PAT entry 1 =
+   WC after fb.c programs the PAT MSR). Sized 16 MiB, above the
+   kernel scratch area. */
+#define VMM_FB_WC_BASE   0xffff889000000000ull
+
 void vmm_init(u64 hhdm_offset, struct limine_executable_address_response *ea);
 u64  vmm_hhdm_offset(void);
 int  vmm_set_leaf_flags(u64 virt, u64 flags);   /* OR flags into leaf PTE */
+int  vmm_map_wc(u64 phys);                      /* map one WC page into the FB window; 0 = ok */
+int  vmm_entry_is_big(const volatile u64 *e);   /* PS-set leaf (1 GiB/2 MiB) */
 
 /* Physical address -> HHDM virtual address (bootloader-provided map). */
 u64 vmm_phys_to_hhdm(u64 paddr);

@@ -21,6 +21,7 @@ bool serial_present(void);
 /* Framebuffer console (kernel/src/fb.c). fb_init is called from kmain
    with the Limine framebuffer response. */
 void fb_init(struct limine_framebuffer *framebuffer);
+void fb_wc_init(void);   /* post-vmm_init: point fb_hw at the WC window */
 void fb_console_disable(void);
 void fb_console_enable(void);
 bool fb_present(void);

@@ -179,9 +179,12 @@ static int fb_enabled = 1;
 
 /* ---- shadow buffer ---- */
 
-/* 4 MiB covers 2560x1600@32bpp exactly; larger panels fall back to
-   serial-only rather than overrunning. */
-#define FB_SHADOW_BYTES (4u << 20)
+/* 16 MiB shadow: covers 2560x1600@32bpp (15.6 MiB) exactly, and
+   1920x1080 with margin; .bss is NOBITS so the ELF file stays ~250 KiB
+   (session 7 — the 4 MiB PROGBITS shadow had ballooned the kernel to
+   4.5 MiB of file data). Larger panels still fall back to serial-only
+   rather than overrunning. Matches the 16 MiB WC window in vmm.c. */
+#define FB_SHADOW_BYTES (16u << 20)
 #define FB_MAX_H         4096u
 
 static u8 shadow_storage[FB_SHADOW_BYTES] __attribute__((aligned(8)));
@@ -408,17 +411,43 @@ static void fb_scroll_1(void)
 
 /* ---- write-combining mapping ---- */
 
-/* PAT entry 1 -> WC, then set the PWT bit on the framebuffer leaf
-   entries (PWT selects PAT index 1 on PTEs without the PAT bit). If
-   the page-table walk cannot find the leaves (unexpected layout), we
-   silently keep the Limine mapping — correctness first, WC is an
-   optimization. */
+/* PAT entry 1 -> WC. Real-hardware-safe order (session 7):
+   1. check CPUID leaf 1 EDX bit 16 (PAT) exists BEFORE touching MSR
+      0x277 — a CPU without PAT raises #GP on the WRMSR, and this runs
+      before the IDT exists, so that fault is unrecoverable;
+   2. program the full MSR preserving every other entry (only bits
+      15:8, entry 1, change: 0x06 WB -> 0x01 WC);
+   3. build a DEDICATED 4 KiB write-combining mapping of the whole
+      framebuffer at VMM_FB_WC_BASE (own page tables, own PTEs —
+      PWT set at creation). The bootloader/HHDM mapping keeps WB;
+      the console draws through this WC window instead.
+      Why not patch the HHDM like session 6 did: the HHDM is 1 GiB
+      big leaves (ours AND possibly Limine's), and the PWT bit on a
+      big leaf is NOT a cache hint — bit 7 is the size encoding there;
+      patching it can #GP or retype a gigabyte of unrelated memory.
+      Session 6 walked the Limine tables AS IF they were 4 KiB
+      trees: on real firmware with big-page HHDM entries that
+      dereferenced garbage table pointers before the IDT existed —
+      unrecoverable. This is the top suspect for the real-hardware
+      black screen (never reproducible in QEMU: OVMF's HHDM is 4 KiB
+      there, and TCG does not enforce PAT encodings).
+   4. invlpg per leaf as the pages are created.
+   Any failure just keeps the plain WB pointer: WC is an
+   optimization, never a correctness need. */
 #define PAT_MSR     0x277u
 #define PWT_FLAG    0x08ull
 
 static void map_fb_write_combining(void)
 {
-    /* PAT entry 1 (bits 15:8) = WC (0x01); leave entry 0 = WB. */
+    /* PAT support advertised? (ask CPUID directly — cheapest truth) */
+    u32 a, b, d, cc;
+    __asm__ volatile ("cpuid" : "=a"(a), "=b"(b), "=d"(d), "=c"(cc)
+                      : "a"(1));
+    if (!(d & (1u << 16)))
+        return;   /* no PAT: keep write-back, no MSR write at all */
+
+    /* PAT entry 1 (bits 15:8) = WC (0x01); every other entry,
+       including entry 0 (WB), untouched. */
     u64 pat = read_msr(PAT_MSR);
     write_msr(PAT_MSR, (pat & ~0xFF00ull) | (0x01ull << 8));
 
@@ -427,13 +456,28 @@ static void map_fb_write_combining(void)
     u64 first = fb_phys & ~0xFFFull;
     u64 last = (fb_phys + fb_bytes + 0xFFF) & ~0xFFFull;
 
+    /* Dedicated WC window: 4 KiB PTEs we create ourselves (the 16 MiB
+       budget above the shadow), PWT selected => PAT entry 1 = WC. */
     int any = 0;
     for (u64 p = first; p < last; p += 0x1000) {
-        u64 virt = vmm_hhdm_offset() + p;
-        if (vmm_set_leaf_flags(virt, PWT_FLAG) == 0)
+        if (vmm_map_wc(p) == 0)
             any = 1;
     }
     pat_wc = any;
+
+    if (pat_wc)
+        fb_hw = (u8 *)(VMM_FB_WC_BASE + (fb_phys - first));
+}
+
+/* Called from kmain AFTER vmm_init(): by then CR3 is OUR PML4 and the
+   WC walk only touches tables we created (fb_init itself still runs
+   pre-VMM on the Limine mapping, as the serial console must work
+   there; only the WC remap is deferred). */
+void fb_wc_init(void)
+{
+    if (!fb || !shadow)
+        return;
+    map_fb_write_combining();
 }
 
 void fb_init(struct limine_framebuffer *framebuffer)
@@ -493,10 +537,11 @@ void fb_init(struct limine_framebuffer *framebuffer)
         memset(dirty, 1, fb_h);
     }
 
-    /* Video memory: WC mapping when possible, else the Limine
-       mapping as-is. */
+    /* Video memory: start on the Limine WB mapping (fb_init runs
+       BEFORE vmm_init — we do not touch bootloader page tables);
+       fb_wc_init() from kmain re-points fb_hw at the WC window once
+       OUR page tables are active. */
     fb_hw = (u8 *)fb->address;
-    map_fb_write_combining();
 
     fb_clear();
     fb_flush();

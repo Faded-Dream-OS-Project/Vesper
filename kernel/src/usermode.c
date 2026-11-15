@@ -90,6 +90,31 @@ static int user_range_ok(u64 addr, u64 len)
     return 1;
 }
 
+/* ---- SMAP-safe user-memory access (session 7) ----
+   cpu_sanitize() no longer clears CR4.SMAP (no pre-IDT control-
+   register writes; see cpu.c), so when firmware leaves SMAP set we
+   must raise AC around every ring-0 read of user pages. STAC/CLAC
+   exist exactly for this and are NOPs when SMAP is clear. Guarded by
+   CPUID (EAX=7,ECX=0,EBX bit 20) because the instructions #UD on
+   older CPUs — Vesper targets post-2014 x86-64, and the fallback
+   (no STAC) is exactly the old behaviour. */
+static int smap_stac_ok = -1;   /* -1 = not probed yet */
+
+static void smap_probe(void)
+{
+    if (smap_stac_ok >= 0)
+        return;
+    smap_stac_ok = 0;
+    u32 a, b, d, c;
+    __asm__ volatile ("cpuid" : "=a"(a) : "a"(0));
+    if (a >= 7) {
+        __asm__ volatile ("cpuid" : "=a"(a), "=b"(b), "=d"(d), "=c"(c)
+                          : "a"(7), "c"(0));
+        if (c & (1u << 20))   /* SMAP */
+            smap_stac_ok = 1;
+    }
+}
+
 /* ---- syscall implementations ---- */
 
 /* Capture ring for the LAST user output (honest tests: the init test
@@ -128,11 +153,19 @@ static u64 sys_write(struct syscall_frame *f)
     if (!user_range_ok(buf, len))
         return -(u64)ERANGE_INV;
     const char *p = (const char *)buf;
+
+    /* user pages may fault under SMAP without AC raised; the probe
+       result decides (STAC/CLAC are harmless NOPs without SMAP) */
+    smap_probe();
+    if (smap_stac_ok)
+        __asm__ volatile ("stac" ::: "memory");
     for (u64 i = 0; i < len; i++)
         kputchar(p[i]);
     /* capture (drop overflow silently; tests use short lines) */
     for (u64 i = 0; i < len && user_cap_len < USER_CAP - 1; i++)
         user_cap[user_cap_len++] = p[i];
+    if (smap_stac_ok)
+        __asm__ volatile ("clac" ::: "memory");
     return len;
 }
 

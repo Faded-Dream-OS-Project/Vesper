@@ -50,7 +50,16 @@ SECTIONS
 
     .data : ALIGN(0x1000) {
         *(.data .data.*)
-        . = ALIGN(8);
+    } :data
+
+    /* .bss is its own NOBITS output section: zero-filled by the
+       bootloader, NOT stored in the ELF file. Inlining .bss into .data
+       (the old layout) turned the 4 MiB console shadow buffer into 4 MiB
+       of FILE data — the kernel ELF ballooned from ~700 KiB (session 5)
+       to 4.5 MiB (session 6), which real UEFI/Ventoy paths must copy
+       byte by byte. Largest .bss consumers: the framebuffer shadow
+       (4 MiB) and per-CPU structures. */
+    .bss : ALIGN(0x1000) {
         __bss_start = .;
         *(.bss .bss.*)
         *(COMMON)

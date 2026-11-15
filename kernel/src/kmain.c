@@ -270,6 +270,11 @@ void kmain(void)
             (unsigned long long)(read_cr3() & ~0xFFFull));
     breadcrumb_stage(9);   /* vmm */
 
+    /* Framebuffer WC window: ONLY now that our own page tables are
+     * active (fb_init itself runs on the Limine mapping and touches
+     * no bootloader tables — see fb.c). */
+    fb_wc_init();
+
     /* ACPI: Limine hands us the RSDP; walk it to the MADT for the
        LAPIC/IOAPIC addresses (x86-64 QEMU always uses ACPI 2.0). */
     if (rsdp_request.response && acpi_init(rsdp_request.response->address) == 0) {
