@@ -1,10 +1,13 @@
 # Vesper — development handoff (2026-11-15, session 2)
 
 State: milestones 1-3 complete and verified; `make run` and `make img`
-both work. Branch `dev`, all commits attributed to FemBoyGamerTechGuy
+both work. Branch `main` (sole branch since session 3; `dev` was
+force-merged into `main` and deleted), all commits attributed to
+FemBoyGamerTechGuy
 <242450780+FemBoyGamerTechGuy@users.noreply.github.com> (history was
-rewritten with git-filter-repo this session; mirror backup at
-/home/z/my-project/vesper-backup-mirror, pre-rewrite dev was fc1e531).
+rewritten with git-filter-repo in session 2; mirror backups at
+/home/z/my-project/vesper-backup-mirror{,-s3}, pre-rewrite dev was
+fc1e531).
 
 ## Identity rule
 Every future commit MUST use:
