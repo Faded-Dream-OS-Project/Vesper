@@ -102,18 +102,26 @@ $(IMG): $(KERNEL) $(LIMINE) limine.conf
 	$(LIMINE) uefi-install $(IMG) || $(LIMINE) bios-install $(IMG)
 
 # ---- QEMU ----
-QEMU_ARGS := -machine q35 -m 512M \
+QEMU_ROMS := $(TOOLS)/usr/share/qemu
+QEMU_ARGS := -L $(QEMU_ROMS) -machine q35 -m 512M \
     -drive if=pflash,format=raw,file=$(OVMF),readonly=on \
     -drive if=pflash,format=raw,file=build/OVMF_VARS.fd \
-    -drive file=$(ISO),format=raw,media=disk \
+    -cdrom $(ISO) \
     -serial file:build/serial.log -display none -no-reboot
 
-build/OVMF_VARS.fd: | build
+build/OVMF_VARS.fd: $(OVMF_VARS) | build
 	cp $(OVMF_VARS) build/OVMF_VARS.fd
 
+# `make run`: boot the ISO under OVMF (UEFI) in QEMU, one command.
+# Runs in the foreground with a timeout so CI sandboxes never hang;
+# serial output is captured to build/serial.log and dumped on exit.
+RUN_SECS ?= 30
 run: $(ISO) build/OVMF_VARS.fd
-	$(QEMU) $(QEMU_ARGS) &
-	@sleep 5 && kill %1 2>/dev/null; true
+	@rm -f build/serial.log
+	@echo ">> qemu (UEFI/OVMF) starting, $(RUN_SECS)s budget; serial -> build/serial.log"
+	@timeout $(RUN_SECS) $(QEMU) $(QEMU_ARGS) || test $$? -eq 124
+	@echo ">> serial output:"
+	@cat build/serial.log | tr -c '[:print:]\n' ' ' | grep -a . | tail -n 30
 
 .PHONY: run
 
