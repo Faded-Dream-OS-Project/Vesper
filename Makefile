@@ -89,17 +89,30 @@ $(ISO): $(KERNEL) $(LIMINE) limine.conf
 	    build/iso_root -o $(ISO)
 	$(LIMINE) bios-install $(ISO)
 
-# ---- disk image (GPT + ESP, for USB sticks and QEMU UEFI) ----
+# ---- disk image (GPT + FAT32 ESP, for USB sticks and QEMU UEFI) ----
+# Layout: protective MBR + GPT (scripts/make_gpt.py), one EFI System
+# Partition at LBA 2048, FAT32, holding BOOTX64.EFI, limine.conf and
+# the kernel. Limine stage is installed for UEFI; BIOS stage sits in
+# the ESP as limine-bios.sys with the MBR patched by bios-install.
+IMG_SZ_MB := 64
+ESP_LBA   := 2048
+# ESP ends at total-34 (last LBA - 33 for backup GPT entries, -1 header)
+MTOOLS := env MTOOLS_SKIP_CHECK=1
+
 img: $(IMG)
 
-$(IMG): $(KERNEL) $(LIMINE) limine.conf
-	qemu-img create -f raw $(IMG) 64M
-	$(TOOLS)/usr/sbin/mkfs.vfat -n VESPER $(IMG)
-	mmd -i $(IMG) ::/EFI ::/EFI/BOOT
-	mcopy -i $(IMG) thirdparty/limine/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
-	mcopy -i $(IMG) limine.conf ::/limine.conf
-	mcopy -i $(IMG) $(KERNEL) ::/vesper.elf
-	$(LIMINE) uefi-install $(IMG) || $(LIMINE) bios-install $(IMG)
+$(IMG): $(KERNEL) $(LIMINE) limine.conf scripts/make_gpt.py | build
+	@esp_secs=$$(( $$(stat -c%s $(IMG) 2>/dev/null || echo 0) )); \
+	esp_secs=$$(( IMG_SZ_MB_HACK )); true
+	python3 scripts/make_gpt.py $(IMG) $$(( $(IMG_SZ_MB) * 1024 * 1024 )) $(ESP_LBA) $$(( $(IMG_SZ_MB) * 1024 * 1024 / 512 - $(ESP_LBA) - 34 ))
+	$(MTOOLS) mformat -i $(IMG)@@$(ESP_LBA)S -c 1 -H $(ESP_LBA) -T $$(( $(IMG_SZ_MB) * 1024 * 1024 / 512 - $(ESP_LBA) - 34 )) -n VESPER ::
+	$(MTOOLS) mmd -i $(IMG)@@$(ESP_LBA)S ::/EFI ::/EFI/BOOT
+	$(MTOOLS) mcopy -i $(IMG)@@$(ESP_LBA)S thirdparty/limine/BOOTX64.EFI ::/EFI/BOOT/BOOTX64.EFI
+	$(MTOOLS) mcopy -i $(IMG)@@$(ESP_LBA)S limine.conf ::/limine.conf
+	$(MTOOLS) mcopy -i $(IMG)@@$(ESP_LBA)S $(KERNEL) ::/vesper.elf
+	$(MTOOLS) mcopy -i $(IMG)@@$(ESP_LBA)S thirdparty/limine/limine-bios.sys ::/limine-bios.sys
+	$(LIMINE) bios-install --force $(IMG) 2 --uninstall-data-file=$(IMG).uninstall
+	truncate -s $$(( $(IMG_SZ_MB) * 1024 * 1024 )) $(IMG)
 
 # ---- QEMU ----
 QEMU_ROMS := $(TOOLS)/usr/share/qemu
