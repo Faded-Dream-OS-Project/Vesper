@@ -136,6 +136,7 @@ void kbd_init(void)
     outb(KBD_CMD, 0x60);              /* write config byte */
     outb(KBD_DATA, cfg);
 
-    /* Route GSI 1 (ISA IRQ 1) to vector 0x21, unmasked. */
-    ioapic_route_gsi(1, KBD_IRQ_VECTOR, 0);
+    /* Route ISA IRQ 1 to vector 0x21 through its MADT override (if
+       any — real machines may map it to a different GSI). */
+    ioapic_route_isa(1, KBD_IRQ_VECTOR, 0);
 }

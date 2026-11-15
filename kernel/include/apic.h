@@ -54,6 +54,8 @@ void lapic_timer_rearm(u64 initial_count);
 u64  lapic_timer_icr(void);
 
 void ioapic_route_gsi(u32 gsi, u8 vector, int masked);
+void ioapic_route_isa(u8 isa_irq, u8 vector, int masked);
+u32  isa_irq_to_gsi(u8 isa_irq);
 u32  ioapic_pins(void);
 
 #endif /* VESPER_APIC_H */
