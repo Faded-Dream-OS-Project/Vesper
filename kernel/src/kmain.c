@@ -11,6 +11,7 @@
 #include <limine.h>
 #include <pmm.h>
 #include <selftest.h>
+#include <vmm.h>
 
 /* ---- Limine requests ----
    Marked sections bracket the request block; the bootloader scans it
@@ -115,7 +116,13 @@ void kmain(void)
             pmm_free_frames(), pmm_total_usable_frames(),
             pmm_total_usable_frames() >> 8);
 
-    /* M3 PMM self-test. */
+    vmm_init(hhdm_request.response->offset,
+             executable_address_request.response);
+    kprintf("VMM: own PML4 active at %#llx\n",
+            (unsigned long long)(read_cr3() & ~0xFFFull));
+
+    /* M3 VMM self-test. */
+
     {
         struct test_ctx t;
         u64 f1, f2;
@@ -135,6 +142,34 @@ void kmain(void)
         pmm_free(f2);
         test_check(&t, "second free restores count",
                    pmm_free_frames() == before);
+        test_summary(&t);
+    }
+
+    {
+        struct test_ctx t;
+        u64 va = VMM_KSCRATCH_BASE;
+        u64 pa = pmm_alloc();
+        u64 got = 0;
+
+        test_begin(&t, "vmm");
+        test_check(&t, "map new page", vmm_map(va, pa, VMM_WRITABLE) == 0);
+        test_check(&t, "mapped reports phys", vmm_mapped(va, &got) == 0
+                   && got == pa);
+        *(volatile u64 *)va = 0x5154504552565350ull;
+        test_check(&t, "write via mapping works",
+                   *(volatile u64 *)vmm_phys_to_hhdm(pa) ==
+                   0x5154504552565350ull);
+        test_check(&t, "unmap page", vmm_unmap(va) == 0);
+        test_check(&t, "unmapped reports unmapped", vmm_mapped(va, NULL) != 0);
+        test_check(&t, "double unmap fails", vmm_unmap(va) != 0);
+        {
+            u64 after_free = pmm_free_frames();
+            pmm_free(pa);
+            /* freeing the data frame returns exactly +1; the page-table
+               frames walk() created stay allocated by design */
+            test_check(&t, "pmm count +1 after data-frame free",
+                       pmm_free_frames() == after_free + 1);
+        }
         test_summary(&t);
     }
 
