@@ -4,10 +4,11 @@
 # Source is viewable but may not be copied, modified, or redistributed
 # without permission.
 #
-# Boots the ISO, waits for the kernel's 4s kbd test window, injects
-# h, i, shift-h, caps_lock, a, then reports the self-test verdict from
-# the serial log. QEMU-only (a USB keyboard on real hardware will not
-# appear as PS/2).
+# Rebuilds the ISO with limine.conf cmdline 'kbd_test' so the kernel
+# runs the keyboard self-test, boots, waits for the 4s window, sends
+# h / i / shift-h / caps_lock / a via the QEMU monitor, then reports
+# the verdict from the serial log. QEMU-only (a USB keyboard on real
+# hardware will not appear as PS/2).
 
 set -u
 TOOLS=/home/z/my-project/.tools/root
@@ -15,6 +16,10 @@ export PATH="$TOOLS/usr/bin:$TOOLS/usr/sbin:$PATH"
 export LD_LIBRARY_PATH="$TOOLS/usr/lib/x86_64-linux-gnu:$TOOLS/usr/lib"
 SHARE=$TOOLS/usr/share/qemu
 cd "$(dirname "$0")/.."
+
+sed 's/^    cmdline:$/    cmdline: kbd_test/' limine.conf > build/limine.conf.kbd
+make iso CONF=build/limine.conf.kbd >/dev/null 2>&1 || \
+    { echo "make iso failed"; exit 1; }
 
 rm -f build/serial.log build/mon.sock
 timeout 90 qemu-system-x86_64 -L "$SHARE" -machine q35 -m 512M \
@@ -48,5 +53,8 @@ for i in $(seq 1 15); do
     grep -aq "M2 self-test" build/serial.log 2>/dev/null && break
 done
 kill $QPID 2>/dev/null; wait $QPID 2>/dev/null
+
+# restore the default ISO
+make iso >/dev/null 2>&1
 
 grep -a "key:\|selftest: kbd" -A7 build/serial.log | tr -c '[:print:]\n' ' '

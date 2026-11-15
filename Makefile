@@ -78,10 +78,12 @@ $(LIMINE): thirdparty/limine/limine.c
 # ---- ISO (UEFI + BIOS hybrid from Limine blobs) ----
 iso: $(ISO)
 
-$(ISO): $(KERNEL) $(LIMINE) limine.conf
+CONF ?= limine.conf
+
+$(ISO): $(KERNEL) $(LIMINE) $(CONF)
 	mkdir -p build/iso_root
 	cp $(KERNEL) build/iso_root/
-	cp limine.conf build/iso_root/
+	cp $(CONF) build/iso_root/limine.conf
 	cp thirdparty/limine/limine-bios-cd.bin build/iso_root/
 	cp thirdparty/limine/limine-uefi-cd.bin build/iso_root/
 	cp thirdparty/limine/limine-bios.sys build/iso_root/

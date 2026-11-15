@@ -57,25 +57,31 @@ static struct limine_rsdp_request rsdp_request = {
 };
 
 __attribute__((used, section(".limine_requests.6")))
+static struct limine_executable_cmdline_request cmdline_request = {
+    .id = LIMINE_EXECUTABLE_CMDLINE_REQUEST_ID,
+    .revision = 0,
+};
+
+__attribute__((used, section(".limine_requests.7")))
 static struct limine_stack_size_request stack_size_request = {
     .id = LIMINE_STACK_SIZE_REQUEST_ID,
     .revision = 0,
     .stack_size = 0x10000,   /* 64 KiB */
 };
 
-__attribute__((used, section(".limine_requests.7")))
+__attribute__((used, section(".limine_requests.8")))
 static struct limine_bootloader_info_request bootloader_info_request = {
     .id = LIMINE_BOOTLOADER_INFO_REQUEST_ID,
     .revision = 0,
 };
 
-__attribute__((used, section(".limine_requests.8")))
+__attribute__((used, section(".limine_requests.9")))
 static struct limine_executable_address_request executable_address_request = {
     .id = LIMINE_EXECUTABLE_ADDRESS_REQUEST_ID,
     .revision = 0,
 };
 
-__attribute__((used, section(".limine_requests.9")))
+__attribute__((used, section(".limine_requests.10")))
 static volatile uint64_t limine_requests_end[2] =
     LIMINE_REQUESTS_END_MARKER;
 
@@ -113,6 +119,26 @@ void m5_thread_c(void *arg)
     while (m5_counts[2] < 2500000)
         m5_counts[2]++;
     kthread_exit();
+}
+
+/* Kernel command line flag: does the boot cmdline contain 'flag'
+   as a whitespace-separated token? (limine.conf 'cmdline: ...') */
+static int cmdline_has(const char *flag)
+{
+    if (!cmdline_request.response || !cmdline_request.response->cmdline)
+        return 0;
+    const char *s = cmdline_request.response->cmdline;
+    size_t n = strlen(flag);
+    while (*s) {
+        while (*s == ' ' || *s == '\t')
+            s++;
+        const char *tok = s;
+        while (*s && *s != ' ' && *s != '\t')
+            s++;
+        if ((size_t)(s - tok) == n && memcmp(tok, flag, n) == 0)
+            return 1;
+    }
+    return 0;
 }
 
 /* ---- kernel entry ---- */
@@ -349,13 +375,13 @@ void kmain(void)
         test_summary(&t);
     }
 
-    {
+    if (cmdline_has("kbd_test")) {
         struct test_ctx t;
         char got[8];
         int n = 0;
 
         test_begin(&t, "kbd");
-        /* Window: collect characters for ~2 seconds. The driver echoes
+        /* Window: collect characters for ~4 seconds. The driver echoes
            each decoded char to serial + framebuffer as it arrives. */
         kprintf("  (kbd test window: 4s, send keys now)\n");
         u64 deadline = timer_ticks() + 4 * TIMER_HZ;
@@ -374,6 +400,8 @@ void kmain(void)
         test_check(&t, "shift decodes to 'H'", n >= 3 && got[2] == 'H');
         test_check(&t, "scancodes were handled", kbd_event_count() >= 6);
         test_summary(&t);
+    } else {
+        kprintf("kbd: skipped (no kbd_test flag on cmdline)\n");
     }
 
     /* ---- Milestone 5: kernel threads (preemption) ---- */
