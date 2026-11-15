@@ -8,9 +8,9 @@ ENTRY(kmain)
 
 PHDRS
 {
-    text   PT_LOAD;
-    rodata PT_LOAD;
-    data   PT_LOAD;
+    text   PT_LOAD FLAGS(5);   /* R + X */
+    rodata PT_LOAD FLAGS(4);   /* R     */
+    data   PT_LOAD FLAGS(6);   /* R + W */
 }
 
 SECTIONS
@@ -19,7 +19,7 @@ SECTIONS
        base virtual address 0xFFFFFFFF80000000. */
     . = 0xFFFFFFFF80000000;
 
-    .text : {
+    .text : ALIGN(0x1000) {
         KEEP(*(.text .text.*))
     } :text
 
