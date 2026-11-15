@@ -1,0 +1,7 @@
+build/
+*.o
+*.elf
+*.iso
+*.img
+*.log
+thirdparty/limine/limine
