@@ -4,10 +4,57 @@ This guide is for the human who flashes Vesper onto a USB stick and
 boots it on a real PC. Everything the kernel needs to tell you is on
 screen — no serial port, no keyboard required.
 
-The kernel image is **untested on real hardware** so far. Everything
-below was verified in QEMU (BIOS + UEFI, USB mass-storage emulation,
-no serial, no PS/2 device). If the real machine misbehaves, the
-"What to report back" section tells you exactly what to capture.
+Status of the current image (session 7): **not yet tested on real
+hardware**. The session-6 image failed there (black screen after
+Limine); the session-7 kernel fixes four concrete boot hazards found
+in that code (see `docs/HANDOFF.md`), and every boot now identifies
+itself with a build-ID line and shows coloured breadcrumb squares
+while the init stages run. If the screen is black, you can still tell
+how far boot got — see "Black-screen photography" below.
+
+## Reading a black screen (session 7)
+
+Every kernel print starts with the build identity:
+
+```
+build: git <hash>[-dirty], <compiler> <version>, <build stamp>
+```
+
+Photograph it whenever anything is visible — it names the exact
+build you booted (the bisect pack images each carry their own
+commit hash here).
+
+While the kernel initialises (before the console exists), each init
+stage draws a **16x16 coloured square in a row at the top-left** of
+the screen and writes its stage code to port 0xE9 (visible with a
+POST debug card). Square colours, in order:
+
+| # | Stage | Colour |
+| --- | --- | --- |
+| 1 | entry | white |
+| 2 | cpu registers read | amber |
+| 3 | framebuffer accepted | blue |
+| 4 | console live (squares clear here) | teal |
+| 5 | GDT | purple |
+| 6 | IDT | red |
+| 7 | PIC | dull red |
+| 8 | PMM | green |
+| 9 | VMM | cyan |
+| 10 | ACPI | yellow |
+| 11 | APIC | grass green |
+| 12 | timer | sky blue |
+| 13 | scheduler | pink |
+| 14 | user mode | grey |
+| 15 | boot done | orange |
+
+A black screen with **N squares** means boot reached stage N+1 and
+died there — photograph and report the count (and colour of the last
+square). A completely black screen with no squares at all means the
+kernel never started (bootloader/firmware issue, or an instant
+fault): report that too — it is a different bug class.
+Once the console is up the squares are cleared; afterwards the
+diagnostics screen reports `boot stages: N reached, last code C`.
+Codes are also on port 0xE9 (1..15 as above).
 
 ## What you need
 
@@ -18,7 +65,8 @@ no serial, no PS/2 device). If the real machine misbehaves, the
   path also works.
 - Built artifact: `vesper.img` (64 MB GPT image) from `make img`.
   Verify it first: `bash scripts/verify_image.sh` must print
-  `RESULT: ALL CHECKS PASS`.
+  `RESULT: ALL CHECKS PASS`. See `docs/BUILDING.md` for the build
+  environment on your own Linux machine (`make doctor` checks it).
 
 ## Warnings — read before flashing
 
@@ -183,14 +231,37 @@ hit a bug; photograph it and report.
 
 | Symptom | Likely cause | Next step |
 | --- | --- | --- |
-| Black screen, no text at all | stick not booted; firmware fell back to internal disk; or framebuffer mode the console cannot render | Check boot menu again; verify `verify_image.sh` passes; try CSM on/off; try another port; report machine model |
+| Black screen, no text, **no squares** | kernel never started: firmware/bootloader issue or instant fault | Check boot menu again; verify `verify_image.sh` passes; try CSM on/off; try another port; report machine model |
+| Black screen with **N squares** | boot reached stage N+1 and faulted | Count the squares (colour order above); photograph; report the count and the build-ID line if visible |
 | "no bootable device" | Secure Boot on; USB not selected; stick flashed in ISO mode (Rufus) | Disable Secure Boot; choose the UEFI USB entry in the boot menu; re-flash with DD mode |
 | Stuck at a Limine menu or text mentioning `limine` | bootloader started but did not find the kernel | The ESP is present (verified) — likely a firmware quirk; photograph the exact screen and report |
 | Garbled / shifted / off-center text | framebuffer format differs from anything seen in QEMU | Photograph the screen; include the `Framebuffer:` line if any text is readable at all |
-| Reboots immediately in a loop | kernel triple-faulted before the console was up | Try CSM on/off; report machine model + firmware version |
+| Reboots immediately in a loop | kernel triple-faulted before the console was up | Note the square count if visible; try CSM on/off; report machine model + firmware version |
 | Kernel panic (red text) on screen | a real kernel bug | Photograph the whole screen (register dump + stack trace included) |
 | Boots but timer warning (amber) | PIT/HPET/CPUID calibration all failed | Photograph; note whether time-based tests still pass |
 | Boots but `kbd: not available` (amber) | no PS/2 controller (normal on modern laptops) | Expected on many machines — USB keyboard support is future work |
+
+## The bisect pack (if the regression persists)
+
+If the session-7 image still fails on your PC, `download/bisect/`
+holds four images built from the commits between the last-known-good
+session-5 build and the session-6 tip:
+
+| Image | Meaning |
+| --- | --- |
+| `vesper-8789845` | session 5 — known good on your PC (M7) |
+| `vesper-69b84e3` | + user-mode hardware robustness |
+| `vesper-9c09219` | + shadow-buffer console / PAT WC (ISO is 2x the others: the 4.5 MiB ELF era) |
+| `vesper-eaeeec2` | + boot menu (session-6 tip) |
+
+Boot them **in that order** (Ventoy works). Each prints its own
+`build: git <commit>-dirty` line and draws the breadcrumb squares, so
+one photograph per boot identifies both the build and the failing
+stage. The first image that fails brackets the regression; report
+which one and how many squares were visible. Note the two
+session-5-era images (8789845, 69b84e3) end in their deliberate
+divide-by-zero panic **after all suites pass** — that is their normal
+tail, not a failure.
 
 ## What to report back
 

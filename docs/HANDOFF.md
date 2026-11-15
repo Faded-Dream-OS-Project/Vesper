@@ -1,3 +1,57 @@
+# Vesper — development handoff (2026-11-15, session 7)
+
+State: all five session-6 commits pushed (remote==local, confirmed
+with git ls-remote). Session 7 hunted the real-hardware regression
+(session-6 build = black screen after Limine on the human's PC, while
+8789845 booted fine). Everything is committed and pushed to `main`
+as FemBoyGamerTechGuy.
+
+Session 7 delivered (all committed, pushed):
+
+- build-ID: every kernel prints 'build: git <hash>, <cc>, <stamp>' as
+  its first line (scripts/gen_build_id.sh; header gitignored).
+- breadcrumbs: 15 init stages draw coloured 16x16 squares at the
+  top-left before the console exists + stage codes to port 0xE9; a
+  black-screen photo shows the last stage reached. Verified: debugcon
+  stream is exactly 1..15.
+- FOUR real-firmware boot hazards fixed (commit 18d3370):
+  1. PAT/WC remap walked Limine's 1 GiB big-page HHDM entries as if
+     4 KiB tables, WRITING garbage pre-IDT (top suspect; latent in
+     QEMU). Now: dedicated 16 MiB WC window built from OUR tables
+     after vmm_init; big-page leaves refused by vmm_set_leaf_flags;
+     PAT MSR write gated on CPUID.
+  2. .bss inlined into .data PROGBITS -> kernel ELF 4.5 MiB of file
+     data (session 5 was ~700 KiB). Now NOBITS; ELF 247720 bytes.
+  3. Panels >1280x800 fell back to serial-only (4 MiB shadow): on a
+     desktop with no serial that IS a black screen with a healthy
+     kernel. Now 16 MiB shadow; GOP matrix 6/6 renders incl.
+     2560x1600; kernel image mapping extended to 32 MiB.
+  4. cpu_sanitize wrote CR0/CR4 pre-IDT. Now read+record only;
+     SMAP handled via STAC/CLAC in sys_write (CPUID-gated).
+- portable build (commit c75b1a3): toolchain discovery + forced
+  freestanding flags verified by disassembly (check_cc.sh — catches
+  endbr64/xmm); doctor.sh with the exact Debian/Ubuntu apt line; all
+  scripts de-hardcoded (PATH + distro OVMF locations + env
+  overrides), LC_ALL=C; verify_image.sh builds the image itself.
+  Clean-clone scrubbed-env flow verified: ALL CHECKS PASS.
+- bisect pack (commit 230aaea + download/bisect/): worktree builds of
+  8789845/69b84e3/9c09219/eaeeec2 with instrumentation backported
+  UNCOMMITTED (bisect-valid); all 4 QEMU-tested BIOS+UEFI with their
+  own build-ID lines.
+
+Next hardware run order (docs/REAL_HARDWARE.md has the details):
+1. NEW vesper.img (session 7) — expect green banner; photo the
+   'build:' line and the boot: timing line.
+2. If black: count breadcrumb squares, photo; if no squares at all,
+   try the bisect pack in order — first failing image brackets the
+   regression; each photo shows its own commit hash.
+
+Untested on hardware (hypotheses only): all four fixes above;
+the bisect pack behaviour on metal; ring-3 still-unresolved failure
+from session 6 (syscall_trace is the instrument).
+
+---
+
 # Vesper — development handoff (2026-11-15, session 6)
 
 State: first real-hardware run completed (Ventoy/UEFI on the human's
