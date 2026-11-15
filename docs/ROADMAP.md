@@ -7,20 +7,22 @@ Milestone status is updated as work is completed and verified.
 | 1 | Boot in QEMU UEFI (OVMF), "Vesper" to serial + framebuffer | done | QEMU q35 + OVMF: serial log shows full banner; framebuffer screendump decoded to the same text |
 | 2 | GDT, IDT, exception handlers, panic register dump | done | QEMU q35 (BIOS+UEFI): deliberate divide-by-zero caught; full register dump + panic + stack trace on serial, then halt |
 | 3 | Physical memory manager, paging, kmalloc/kfree | done | QEMU q35 (BIOS+UEFI): self-tests on serial — pmm 6/6, vmm 7/7 (own PML4 active, map/unmap/write), heap 10/10 (incl. 64-alloc stress) ALL PASS |
-| 4 | Timer interrupts + keyboard driver | pending | |
-| 5 | Scheduler with kernel threads + context switching | pending | |
+| 4 | Timer interrupts + keyboard driver | done | QEMU q35 (BIOS+UEFI): PIC remapped+masked, MADT parsed (LAPIC 0xFEE00000, IOAPIC 0xFEC00000), LAPIC timer calibrated vs PIT (1003.9 MHz bus, 100 Hz tick), timer self-test 4/4 (100 ms sleep -> ~10 ticks, EOI loop); PS/2 keyboard via IOAPIC GSI 1, automated QEMU-monitor sendkey harness (scripts/kbd_test.sh): 'key: h/i/H' + 'selftest: 5 passed, 0 failed -> ALL PASS' |
+| 5 | Scheduler with kernel threads + context switching | done | QEMU q35 (BIOS): 3 threads x 5 iterations interleaving a1 b1 c1 c2 a2 b2 ... 'counters: a=5 b=5 c=5', selftest 5/5 ALL PASS; context switch in sched_switch_to.S (prev, next) two-arg form |
 | 6 | Syscalls, user mode, minimal init | pending | |
 | 7 | Bootable USB image, safe fallbacks, flash/boot docs | pending (image groundwork done: `make img` GPT+FAT32 ESP boots OVMF+SeaBIOS) | |
 
 Infrastructure:
+- `main` is the sole branch (dev merged + deleted in session 3).
 - `make run` boots the ISO under OVMF in one command (RUN_SECS
   budget, serial tail printed).
-- `make img` builds a 64 MiB GPT disk: BIOS-boot partition (entry 1,
-  Limine stage 2), FAT32 ESP (entry 0) with BOOTX64.EFI +
-  limine.conf + kernel; boots under OVMF (AHCI) and SeaBIOS.
+- `make img` builds a 64 MiB GPT disk: BIOS-boot partition (Limine
+  stage 2), FAT32 ESP with BOOTX64.EFI + limine.conf + kernel; boots
+  under OVMF (AHCI) and SeaBIOS.
+- `scripts/kbd_test.sh` runs the automated keyboard self-test.
 - History rewritten to a single identity (FemBoyGamerTechGuy
   <242450780+FemBoyGamerTechGuy@users.noreply.github.com>); that
-  identity must be used for every future commit.
+  identity is used for every commit.
 
 Notes:
 - The kernel keeps Limine's boot selectors (CS=0x28, DS/SS=0x30) valid
@@ -28,3 +30,5 @@ Notes:
   TSS lives at 0x38.
 - ISR stubs are generated (scripts/gen_isr_stubs.py) with an explicit
   pointer table (isr_stub_table) — no runtime pointer arithmetic.
+- A USB keyboard on real hardware will not appear as PS/2; the
+  keyboard stack is QEMU-only until USB lands (M7+).

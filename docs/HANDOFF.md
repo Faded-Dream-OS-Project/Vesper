@@ -1,119 +1,116 @@
-# Vesper — development handoff (2026-11-15, session 2)
+# Vesper — development handoff (2026-11-15, session 3)
 
-State: milestones 1-3 complete and verified; `make run` and `make img`
-both work. Branch `main` (sole branch since session 3; `dev` was
-force-merged into `main` and deleted), all commits attributed to
+State: milestones 1-5 complete and verified. Branch `main` (sole
+branch; `dev` was force-merged into `main` and deleted this session,
+default branch confirmed `main` via API). All commits attributed to
 FemBoyGamerTechGuy
-<242450780+FemBoyGamerTechGuy@users.noreply.github.com> (history was
-rewritten with git-filter-repo in session 2; mirror backups at
-/home/z/my-project/vesper-backup-mirror{,-s3}, pre-rewrite dev was
-fc1e531).
+<242450780+FemBoyGamerTechGuy@users.noreply.github.com> (history
+rewritten in session 2; mirror backups at
+/home/z/my-project/vesper-backup-mirror{,-s3}).
 
 ## Identity rule
 Every future commit MUST use:
   git config user.name  "FemBoyGamerTechGuy"
   git config user.email "242450780+FemBoyGamerTechGuy@users.noreply.github.com"
 (or the same as GIT_AUTHOR_*/GIT_COMMITTER_* env vars). Never commit
-under any other identity.
+under any other identity. No Co-authored-by trailers.
 
 ## Environment (recreated on demand)
 - Tools live in /home/z/my-project/.tools/root (QEMU 10.0.13, OVMF 4M,
   mtools, xorriso, qemu-img, mkfs.vfat) — installed WITHOUT root via
-  `bash /home/z/my-project/scripts/setup_tools.sh` (apt-get download +
-  dpkg-deb -x). QEMU needs `-L /home/z/my-project/.tools/root/usr/share/qemu`.
-- Build: host gcc 14.2, freestanding; Makefile auto-uses x86_64-elf-gcc
-  if present. `make` / `make iso` / `make img` / `make run RUN_SECS=30`
-  / `make clean`.
+  `bash /home/z/my-project/scripts/setup_tools.sh`. QEMU needs `-L
+  /home/z/my-project/.tools/root/usr/share/qemu`.
+- Build: host gcc 14.2, freestanding; `make` / `make iso` / `make img`
+  / `make run RUN_SECS=30` / `make clean`. Warning-free (-Wall
+  -Wextra; only the benign ld RWX-segment note remains).
 - Auth: credential helper in .git/config reads
   /home/z/my-project/.git-token (gitignored; never print or commit it).
 
 ## Verified this session (commands + observed output)
-- Regression: clean rebuild; `make iso` + OVMF boot → banner + M2
-  divide-by-zero dump + "system halted" on serial.
-- `make run RUN_SECS=25` → same, in one command.
-- `make img` → 64 MiB GPT image; boots under OVMF (AHCI) AND SeaBIOS
-  with full banner + M2 dump.
-- M3 self-tests on serial (both BIOS and UEFI paths):
-  "selftest: pmm  6 passed, 0 failed -> ALL PASS"
-  "selftest: vmm  7 passed, 0 failed -> ALL PASS"
-  "selftest: heap 10 passed, 0 failed -> ALL PASS"
+- Regression after session recycle: `make clean && make && make iso &&
+  make run RUN_SECS=25` — banner, GDT/IDT, pmm 6/6 vmm 7/7 heap 10/10,
+  div-zero dump, system halted.
+- M4: `bash scripts/kbd_test.sh` (automated QEMU monitor sendkey h/i/
+  shift-h/caps_lock/a) -> "key: h", "key: i", "key: H", selftest 5/5.
+- M4/M5 full serial log per boot (BIOS and UEFI paths):
+  "PIC remapped (0x20-0x2F) and fully masked."
+  "ACPI: MADT ok — LAPIC 0xfee00000, IOAPIC 0xfec00000 (GSI 0 base),
+  1 LAPICs"
+  "timer: LAPIC timer calibrated (1003872000 Hz bus), 100 Hz tick"
+  "interrupts enabled (sti)."
+  "sched: idle task online" -> threads a/b/c interleave -> "counters:
+  a=5 b=5 c=5", selftest 5/5 -> M2 div-zero -> halt.
 
 ## Gotchas learned (do not re-learn these)
 1. Limine request structs must be in program order: ordered
-   subsections .limine_requests.0..8 in the linker script (kmain.c).
+   subsections .limine_requests.0..N (kmain.c + linker.ld KEEP list —
+   extend BOTH when adding a request).
 2. Limine rejects ELFs whose PHDRs with different permissions share a
    page: page-align every segment in kernel/linker.ld.
 3. limine.conf v12 syntax: "option: value"; `serial: yes` is BIOS-only.
 4. Fastest debug channel: BIOS boot `qemu ... -cdrom vesper.iso
-   -serial file:build/serial.log` (Limine prints its own errors there,
-   e.g. "PHDRs with different permissions sharing the same memory page").
+   -serial file:build/serial.log`.
 5. GDT descriptors: bytes 0-1 limit lo, 2-4 base[0:24], 5 access,
-   6 flags<<4|limit hi, 7 base[24:32].
-6. Keep selectors 0x28/0x30 (Limine's CS/DS) valid in our GDT; TSS at
-   0x38. Avoid a far CS reload (lretq) — mirror descriptors instead.
-7. ISR stubs: explicit .rodata pointer table (isr_stub_table), never
-   runtime pointer arithmetic over the stub region.
-8. GPT images (the OVMF boot saga):
-   - The protective MBR entry (type 0xEE) MUST span from LBA 1; OVMF
-     rejects GPT disks otherwise (root cause of the whole "no ESP
-     mount" chain — not the FAT, not CRCs, not attributes).
-   - Huge pages are only legal at PDPT (1 GiB) / PD (2 MiB) level,
-     never in the PML4 itself (a PS bit in a PML4 entry is ignored →
-     the entry is read as a table pointer → #PF).
-   - The kernel image needs plain 4 KiB pages: virt 0xffffffff80000000
-     and phys (Limine-chosen) are NOT congruent mod 2 MiB, so huge
-     pages would translate code to garbage physical addresses.
-   - The HHDM must cover the full physical space (512 x 1 GiB PDPT
-     entries): QEMU's framebuffer sits near 4 GiB and fb.c writes
-     through the HHDM.
-   - `limine bios-install <img> <N>` needs a BIOS boot partition
-     (type GUID 21686148-...) as partition N; it also APPENDS ~532
-     bytes of uninstall data to the image — truncate back afterward
-     (`truncate -s 64M vesper.img`).
-   - mformat for the ESP: `-c 1 -H 2048 -T <sectors>` → real FAT32
-     with hidden sectors set.
-   - This Limine build has NO `uefi-install` command; UEFI boots
-     straight from BOOTX64.EFI in the ESP.
-9. PMM/VMM interplay: walk() creates page-table frames from the PMM;
-   they intentionally persist after unmap (self-tests account for
-   that: free of the data frame must give exactly +1).
-10. kprintf is homegrown: supports %s %c %d %u %x %p %% with '#',
-    '0', width, and l/z/h length modifiers. u64 args print fine with
-    %lx after the modifiers exist; when in doubt cast to (unsigned
-    long long) + %llx.
+   6 flags<<4|limit hi, 7 base[24:32]. Keep selectors 0x28/0x30 valid;
+   TSS at 0x38. No far CS reload.
+6. ISR stubs: explicit .rodata pointer table (isr_stub_table).
+7. GPT images: protective MBR 0xEE entry MUST start at LBA 1 (OVMF
+   rejects otherwise); huge pages only at PDPT/PD level; kernel image
+   needs 4 KiB pages (virt/phys not 2 MiB-congruent); HHDM must cover
+   the full physical space; limine bios-install appends ~532 bytes
+   (truncate back); mformat `-c 1 -H 2048 -T <secs>` for a real FAT32
+   ESP. No `uefi-install` command exists in this Limine build.
+8. ACPI: Limine's rsdp response->address is ALREADY VIRTUAL (HHDM) —
+   use directly; XSDT/RSDT entry pointers are PHYSICAL — translate via
+   vmm_phys_to_hhdm. RSDP layout is packed: rev @15, rsdt @16, len @20,
+   xsdt @24 (a natural C struct is off by one). SeaBIOS boots provide
+   ACPI 1.0 (RSDT, 4-byte entries); OVMF provides 2.0 (XSDT) — parse
+   both.
+9. PIT: the one-shot gate is polled via the READ-BACK command
+   (outb 0x43, 0xE2; status bit 7 = OUT pin). Port 0x61 bit 6 does NOT
+   work on QEMU.
+10. LAPIC: do not set reserved bits in the spurious-interrupt
+    register; EOI is a plain write of 0 to 0xB0. QEMU TCG's LAPIC
+    needs the initial count REWRITTEN on each timer interrupt or the
+    periodic reload stalls after the first expiry (timer_tick re-arms
+    — harmless on hardware).
+11. Context switching: sched_switch_to MUST take (prev, next) as
+    explicit arguments. Reading the global `current` inside the
+    switch happens AFTER the caller updated it — the first version
+    saved the new task's rsp over the old task's and "switched to
+    itself" (livelock with zero crashes — extremely confusing).
+12. Switching tasks from INSIDE an interrupt handler livelocks under
+    QEMU TCG (threads get exactly one activation each). The timer IRQ
+    only records the tick; threads round-robin cooperatively
+    (sched_yield while waiting for the tick counter to advance).
+13. kprintf from thread context is safe; fb console scrolling is a
+    memmove storm under TCG — fb_console_disable()/enable() gate it
+    (used around the scheduler self-test only).
+14. kprintf is homegrown (%s %c %d %u %x %p %% with '#', '0', width,
+    l/z/h modifiers); u64 args print fine with %lx — but volatiles
+    promoted to int need casts.
 
-## M4 plan (next milestone: timer + keyboard)
-1. LAPIC (parse ACPI MADT via Limine's ACPI RSDP request — add
-   `limine_rsdp_request` to kmain; Local APIC at MMIO, register
-   LAPIC_TIMER with a calibration against the PIT).
-   Simpler first cut: PIT on IRQ0 (0x40 ports, 100 Hz, mode 3),
-   remap PIC (0x20/0xA0, ICW sequence), unmask IRQ0 only, EOI.
-2. Timer interrupt path: irq_dispatcher must dispatch IRQ0 → handler
-   with EOI; a jiffies counter + uptime print over serial proves it.
-   Our stubs already route vectors 32..255 to irq_dispatcher; wire a
-   small irq_install(n, handler) table in idt.c/isr.c.
-3. PS/2 keyboard: IRQ1, ports 0x60/0x64, scancode set 1 → ASCII map;
-   echo keys to serial. Verify with QEMU monitor `sendkey a` over the
-   serial log.
-4. Keep everything in C; asm only where C can't (iretq stubs exist).
-5. Self-tests/verification: boot → "PIT: 100 Hz, 10 ticks in 100 ms"
-   style output; `sendkey` → "key: a" on serial.
+## M6 plan (next milestone: syscalls + user mode)
+1. Syscall layer (MSR STAR/LSTAR/MASK; syscall/sysret in a small .S
+   stub; vector table in C — plain C only elsewhere).
+2. User mode: page tables per process (own PML4 from the PMM/VMM
+   helpers; user=1 pages; kernel entry region shared read-only).
+3. Ring-3 trampoline + a tiny static "init" program embedded in the
+   kernel image (no userland tools yet; a raw binary blob in .rodata
+   is fine).
+4. Self-tests: syscall echo (MSR syscall path), user-mode segfault
+   caught by the #PF handler with user RIP reported, then a clean
+   return to kernel threads.
+5. Then M7 (USB image + docs; `make img` GPT/ESP groundwork exists).
 
 ## Verification commands
 ```
 export PATH=/home/z/my-project/.tools/root/usr/bin:/home/z/my-project/.tools/root/usr/sbin:$PATH
 export LD_LIBRARY_PATH=/home/z/my-project/.tools/root/usr/lib/x86_64-linux-gnu:/home/z/my-project/.tools/root/usr/lib
-make iso && make run RUN_SECS=25        # ISO under OVMF, serial tail printed
-make img                                # GPT/FAT32 ESP disk image
+make clean && make && make iso
+make run RUN_SECS=25                       # ISO under OVMF (UEFI), serial tail
+bash scripts/kbd_test.sh                   # automated PS/2 keyboard self-test
 SHARE=/home/z/my-project/.tools/root/usr/share/qemu
 qemu-system-x86_64 -L $SHARE -machine q35 -m 512M \
-  -device ahci,id=ahci0 -drive file=vesper.img,format=raw,if=none,id=hd0 \
-  -device ide-hd,drive=hd0,bus=ahci0.0 \
-  -serial file:build/serial.log -display none -no-reboot            # BIOS path
-qemu-system-x86_64 -L $SHARE -machine q35 -m 512M \
-  -drive if=pflash,format=raw,file=.../OVMF_CODE_4M.fd,readonly=on \
-  -drive if=pflash,format=raw,file=build/OVMF_VARS.fd \
-  -device ahci,id=ahci0 -drive file=vesper.img,format=raw,if=none,id=hd0 \
-  -device ide-hd,drive=hd0,bus=ahci0.0 \
-  -serial file:build/serial.log -display none -no-reboot            # UEFI path
+  -cdrom vesper.iso -serial file:build/serial.log -display none -no-reboot   # BIOS path
 ```
