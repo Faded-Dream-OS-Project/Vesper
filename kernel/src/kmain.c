@@ -121,6 +121,30 @@ void m5_thread_c(void *arg)
     kthread_exit();
 }
 
+/* Guard-page self-test thread: unbounded recursion blows the 16 KiB
+   stack downward until it touches the unmapped guard page below it. */
+static volatile u64 ovf_sink;
+
+void m5_overflow_thread(void *arg)
+{
+    (void)arg;
+    volatile char big[2048];
+    for (u64 i = 0; i < sizeof(big); i++)
+        big[i] = (char)i;
+    ovf_sink = (u64)sizeof(big);
+    /* Recurse until the guard page faults. The volatile trampoline
+       keeps -Winfinite-recursion quiet (the recursion IS the point). */
+    {
+        void (*volatile next)(void *) = m5_overflow_thread;
+        /* force a REAL frame (no tail call): the call never returns
+           (the guard page faults first), and the statement below keeps
+           the compiler from turning the call into a jmp */
+        next(arg + 1);
+        ovf_sink++;   /* unreachable */
+    }
+    kthread_exit();   /* placate -Wfalling-through... not reached */
+}
+
 /* Kernel command line flag: does the boot cmdline contain 'flag'
    as a whitespace-separated token? (limine.conf 'cmdline: ...') */
 static int cmdline_has(const char *flag)
@@ -443,6 +467,23 @@ void kmain(void)
                    m5_counts[0] >= 2500000 && m5_counts[1] >= 2500000 &&
                    m5_counts[2] >= 2500000);
         test_summary(&t);
+    }
+
+    /* ---- guard-page stack-overflow self-test (gated: it panics on
+       purpose). Runs AFTER everything else would normally halt; only
+       with 'guard_test' on the cmdline. The pass condition is a #PF
+       with CR2 inside the guard region and a readable panic dump —
+       verified from the serial log by scripts/guard_test.sh. ---- */
+    if (cmdline_has("guard_test")) {
+        kprintf("guard: creating overflowing thread ( deliberate )\n");
+        int ovf_id = kthread_create("ovf", m5_overflow_thread, 0);
+        /* give the overflowing thread up to 10 seconds to blow its
+           stack; the #PF handler panics (halted) — that is the PASS
+           condition checked from the serial log */
+        (void)ovf_id;
+        u64 deadline = timer_ticks() + 10 * TIMER_HZ;
+        while (timer_ticks() < deadline)
+            __asm__ volatile ("pause");
     }
 
     kprintf("M2 self-test: raising divide-by-zero...\n");

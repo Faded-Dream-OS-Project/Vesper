@@ -55,6 +55,8 @@ void idt_init(void)
             ist = IST_DF;
         else if (vector == 2)
             ist = IST_NMI;
+        else if (vector == 14)
+            ist = IST_PF;
         idt_set_gate((u8)vector, isr_stub_table[vector], ist,
                      IDT_GATE_INTERRUPT);
     }

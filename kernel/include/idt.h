@@ -14,6 +14,8 @@
    ist1 for double fault (#DF) and ist2 for NMI. */
 #define IST_DF   1
 #define IST_NMI  2
+#define IST_PF   3   /* valid stack for #PF so a guard-page hit during
+                       stack exhaustion cannot escalate to #DF */
 
 struct idt_entry {
     u16 offset_lo;

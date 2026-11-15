@@ -8,6 +8,7 @@
 #include <heap.h>
 #include <lib.h>
 #include <sched.h>
+#include <vmm.h>
 
 /* Round-robin scheduler.
 
@@ -55,10 +56,21 @@ int kthread_create(const char *name, kthread_fn_t fn, void *arg)
         return -1;
 
     /* Task struct stays in the static table; the stack comes from the
-       kernel heap. */
-    u8 *stack = kmalloc(KTHREAD_STACK_SIZE);
-    if (!stack)
+       kernel heap. One guard page is reserved BELOW the stack and left
+       unmapped: a downward overflow faults on it (readable #PF panic)
+       instead of silently corrupting the neighbouring heap blocks.
+
+       Heap blocks are only 8-byte aligned, so the guard page must be
+       page-ALIGNED WITHIN the allocation (unmapping an unaligned block
+       start once took out the tail of the PREVIOUS heap block and
+       corrupted a live thread's stack — found by the guard test
+       itself). Slack: up to one page of lead-in + one guard page. */
+    u8 *raw = kmalloc(KTHREAD_STACK_SIZE + 8 * VMM_PAGE_SIZE);
+    if (!raw)
         return -1;
+    u64 guard = ((u64)raw + VMM_PAGE_SIZE - 1) & ~(u64)(VMM_PAGE_SIZE - 1);
+    vmm_unmap(guard);   /* guard page (page-aligned, inside raw) */
+    u8 *stack = (u8 *)(guard + VMM_PAGE_SIZE);
 
     struct task *t = &tasks[slot];
     memset(t, 0, sizeof(*t));

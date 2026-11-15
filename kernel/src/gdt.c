@@ -26,6 +26,7 @@ static struct tss_entry tss __attribute__((aligned(16)));
 /* ist stacks: 16 KiB each, static since we have no heap yet. */
 static u8 df_stack[16384] __attribute__((aligned(16)));
 static u8 nmi_stack[16384] __attribute__((aligned(16)));
+static u8 pf_stack[16384] __attribute__((aligned(16)));
 
 static u64 gdt[16] __attribute__((aligned(16)));
 
@@ -68,9 +69,11 @@ void gdt_init(void)
     memset(&tss, 0, sizeof(tss));
     memset(df_stack, 0, sizeof(df_stack));
     memset(nmi_stack, 0, sizeof(nmi_stack));
+    memset(pf_stack, 0, sizeof(pf_stack));
 
     tss.ist[IST_DF - 1] = (u64)(df_stack + sizeof(df_stack));
     tss.ist[IST_NMI - 1] = (u64)(nmi_stack + sizeof(nmi_stack));
+    tss.ist[IST_PF - 1] = (u64)(pf_stack + sizeof(pf_stack));
 
     encode_segment(&gdt[1], 0, 0xFFFFF, 0x9A, 0xA);  /* 0x08 kernel code64 */
     encode_segment(&gdt[2], 0, 0xFFFFF, 0x92, 0xC);  /* 0x10 kernel data */
