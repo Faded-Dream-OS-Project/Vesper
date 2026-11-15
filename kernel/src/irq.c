@@ -8,6 +8,7 @@
 #include <console.h>
 #include <irq.h>
 #include <kbd.h>
+#include <sched.h>
 #include <timer.h>
 
 /* IRQ routing table. Vectors 0x20..0xFF map to handlers; the LAPIC
@@ -30,6 +31,10 @@ void timer_irq(struct int_frame *frame)
 {
     (void)frame;
     timer_tick();
+    sched_note_tick();
+    /* NOTE: switching from inside the IRQ livelocks under QEMU TCG
+       (verified experimentally); the scheduler yields from thread
+       context instead — see sched_note_tick(). */
 }
 
 /* PS/2 keyboard entry point (vector 0x21). */

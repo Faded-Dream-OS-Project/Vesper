@@ -33,9 +33,9 @@ ISO     := vesper.iso
 IMG     := vesper.img
 
 KERNEL_SRCS := $(wildcard kernel/src/*.c)
-ASM_SRCS    := kernel/src/isr_stubs.S kernel/src/gdt_flush.S
+ASM_SRCS    := kernel/src/isr_stubs.S kernel/src/gdt_flush.S kernel/src/sched_switch_to.S
 KERNEL_OBJS := $(patsubst kernel/src/%.c,build/%.o,$(KERNEL_SRCS)) \
-               build/isr_stubs.o build/gdt_flush.o
+               build/isr_stubs.o build/gdt_flush.o build/sched_switch_to.o
 
 CFLAGS := -std=c17 -Wall -Wextra -ffreestanding -nostdlib \
           -fno-stack-protector -fno-pic -fno-pie -mno-red-zone \
@@ -57,6 +57,9 @@ build/isr_stubs.o: kernel/src/isr_stubs.S | build
 	$(CC) $(CFLAGS) -c $< -o $@
 
 build/gdt_flush.o: kernel/src/gdt_flush.S | build
+	$(CC) $(CFLAGS) -c $< -o $@
+
+build/sched_switch_to.o: kernel/src/sched_switch_to.S | build
 	$(CC) $(CFLAGS) -c $< -o $@
 
 kernel/src/isr_stubs.S: scripts/gen_isr_stubs.py

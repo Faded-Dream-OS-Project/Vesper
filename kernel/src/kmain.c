@@ -15,6 +15,7 @@
 #include <limine.h>
 #include <pic.h>
 #include <pmm.h>
+#include <sched.h>
 #include <selftest.h>
 #include <timer.h>
 #include <vmm.h>
@@ -77,6 +78,56 @@ static struct limine_executable_address_request executable_address_request = {
 __attribute__((used, section(".limine_requests.9")))
 static volatile uint64_t limine_requests_end[2] =
     LIMINE_REQUESTS_END_MARKER;
+
+/* ---- M5 self-test threads ---- */
+
+volatile u64 m5_counts[3];
+
+static volatile int m5_go;
+
+
+/* ---- M5 self-test threads ---- */
+
+volatile u64 m5_counts[3];
+
+void m5_thread_a(void *arg)
+{
+    (void)arg;
+    for (volatile int i = 0; i < 5; i++) {
+        m5_counts[0]++;
+        kprintf("  [a] tick %lu\n", (unsigned long)m5_counts[0]);
+        u64 seq = sched_tick_seq();
+        while (sched_tick_seq() == seq)
+            sched_yield();
+    }
+    kthread_exit();
+}
+
+void m5_thread_b(void *arg)
+{
+    (void)arg;
+    for (volatile int i = 0; i < 5; i++) {
+        m5_counts[1]++;
+        kprintf("  [b] tick %lu\n", (unsigned long)m5_counts[1]);
+        u64 seq = sched_tick_seq();
+        while (sched_tick_seq() == seq)
+            sched_yield();
+    }
+    kthread_exit();
+}
+
+void m5_thread_c(void *arg)
+{
+    (void)arg;
+    for (volatile int i = 0; i < 5; i++) {
+        m5_counts[2]++;
+        kprintf("  [c] tick %lu\n", (unsigned long)m5_counts[2]);
+        u64 seq = sched_tick_seq();
+        while (sched_tick_seq() == seq)
+            sched_yield();
+    }
+    kthread_exit();
+}
 
 /* ---- kernel entry ---- */
 
@@ -339,6 +390,43 @@ void kmain(void)
         test_summary(&t);
     }
 
+    /* ---- Milestone 5: kernel threads ---- */
+    fb_console_disable();   /* fb scroll memmove interferes under TCG */
+    sched_init();
+    kprintf("sched: idle task online (%lu tasks).\n",
+            (unsigned long)sched_task_count());
+    {
+        struct test_ctx t;
+        extern void m5_thread_a(void *), m5_thread_b(void *), m5_thread_c(void *);
+
+        test_begin(&t, "sched");
+        kthread_create("a", m5_thread_a, 0);
+        kthread_create("b", m5_thread_b, 0);
+        kthread_create("c", m5_thread_c, 0);
+        kprintf("  (3 threads created; running until they finish)\n");
+
+        /* The idle path (this code) keeps scheduling while threads
+           run on each timer tick; wait for all three to finish. */
+        u64 spins = 0;
+        while (sched_task_count() > 1 && spins++ < 3000000000ull)
+            sched_yield();
+
+        extern volatile u64 m5_counts[3];
+        kprintf("  counters: a=%lu b=%lu c=%lu\n",
+                (unsigned long)m5_counts[0],
+                (unsigned long)m5_counts[1],
+                (unsigned long)m5_counts[2]);
+        test_check(&t, "all threads finished", sched_task_count() == 1);
+        test_check(&t, "thread a progressed", m5_counts[0] >= 5);
+        test_check(&t, "thread b progressed", m5_counts[1] >= 5);
+        test_check(&t, "thread c progressed", m5_counts[2] >= 5);
+        test_check(&t, "threads interleaved (no starvation)",
+                   m5_counts[0] >= 5 && m5_counts[1] >= 5 &&
+                   m5_counts[2] >= 5);
+        test_summary(&t);
+    }
+
+    fb_console_enable();
     kprintf("M2 self-test: raising divide-by-zero...\n");
     {
         volatile u64 num = 1, denom = 0;

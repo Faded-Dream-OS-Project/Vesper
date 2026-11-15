@@ -196,8 +196,22 @@ static void fb_draw_char(u32 cx, u32 cy, char ch)
     }
 }
 
+static int fb_enabled = 1;
+
+void fb_console_disable(void)
+{
+    fb_enabled = 0;
+}
+
+void fb_console_enable(void)
+{
+    fb_enabled = 1;
+}
+
 void fb_putc(char c)
 {
+    if (!fb_enabled)
+        return;
     if (!fb)
         return;
 
