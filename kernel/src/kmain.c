@@ -9,6 +9,7 @@
 #include <idt.h>
 #include <lib.h>
 #include <limine.h>
+#include <pic.h>
 #include <pmm.h>
 #include <selftest.h>
 #include <vmm.h>
@@ -110,6 +111,12 @@ void kmain(void)
     kprintf("GDT/TSS loaded.\n");
     idt_init();
     kprintf("IDT loaded (256 gates).\n");
+
+    /* Milestone 4: interrupt hardware. PIC first: remap + full mask so
+       the legacy chips cannot raise spurious vectors while we own the
+       APIC path. */
+    pic_init();
+    kprintf("PIC remapped (0x20-0x2F) and fully masked.\n");
 
     /* ---- Milestone 3 ---- */
     pmm_init(mm, hhdm_request.response->offset);
