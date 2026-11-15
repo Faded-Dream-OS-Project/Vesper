@@ -1,10 +1,24 @@
-# Vesper — development handoff (2026-11-15, session 5)
+# Vesper — development handoff (2026-11-15, session 6)
 
-State: milestones 1-7 complete **in QEMU**; M7 (real-hardware boot)
-is now awaiting a human flash test of vesper.img per
-docs/REAL_HARDWARE.md. Branch `main` (sole branch). All commits
-attributed to FemBoyGamerTechGuy
+State: first real-hardware run completed (Ventoy/UEFI on the human's
+main PC): M1-M5 self-tests PASS on metal; ring-3 init faulted
+(#PF/CR2=0, RIP inside rodata — not reproducible in QEMU; defensive
+fixes + instrumentation landed this session); console was unusably
+slow -> shadow-buffer console rewrite. Branch `main` (sole branch).
+All commits attributed to FemBoyGamerTechGuy
 <242450780+FemBoyGamerTechGuy@users.noreply.github.com>.
+
+Session 6 delivered: honest user-mode tests + full user-fault dump,
+poison flag, zeroed user stacks/pages, CR0/CR4/EFER hygiene +
+diagnostics, -mgeneral-regs-only user builds, syscall_trace,
+shadow-buffer console with WC video mapping + boot timing, boot menu
+(normal / diagnostics hold / quiet), ASCII-only printed strings with
+fallback glyph.
+
+NOTE: pushes are BLOCKED this session — the sandbox recycle wiped
+/home/z/my-project/.git-token (and .tools, which was restored via
+scripts/setup_tools.sh). Commits 77d879d..HEAD are local; push them
+as soon as the token file is back (credential helper reads it).
 
 Session 5 delivered: full on-screen framebuffer console with colours,
 the boot diagnostics screen, hardware-robustness fixes (IOAPIC MADT
@@ -139,6 +153,35 @@ areas, in expected order of likelihood:
 32. QEMU always emulates the i8042 ports even with -nodefaults (they
     are chipset functionality, not a device) — the PS/2-absent path
     can only be exercised with the kbd_test_absent cmdline flag.
+
+## Session 6 gotchas (33-39)
+33. The sandbox recycle wipes /home/z/my-project/.tools AND
+    /home/z/my-project/.git-token; rerun scripts/setup_tools.sh AND
+    re-symlink SeaBIOS: bios-256k.bin etc. live in share/seabios/,
+    not share/qemu/ (QEMU -L looks only in share/qemu). Pushes fail
+    until the token file is restored.
+34. git core.fileMode must stay false — the recycle flips exec bits
+    on every tracked file and floods 'mode change' diffs.
+35. The hardware ring-3 failure (#PF CR2=0, RIP inside .rodata, both
+    programs, init also faulting where fault_init's #GP was expected)
+    did NOT reproduce in QEMU under: poison, -cpu
+    Skylake/Icelake/EPYC, la57=on, smp4, UEFI+poison. Unresolved;
+    syscall_trace + the honest tests will catch it on the next
+    hardware boot. Zeroed user stacks, SMEP/SMAP clearing and
+    -mgeneral-regs-only are landed as fixes regardless.
+36. The console must NOT allocate its shadow from the heap: fb_init
+    runs before kheap_init (kmalloc NULL -> silent serial-only
+    fallback). Static .bss buffers instead.
+37. PAT WC recipe: PAT entry 1 (MSR 0x277 bits 15:8) = 0x01, then
+    PWT (0x8) on the leaf PTE selects index 1; entry 0 stays WB.
+    vmm_set_leaf_flags does the invlpg.
+38. QEMU TCG numbers: normal boot ~2.1 s (163 ms flushing), quiet
+    ~0.35 s — the difference is the shadow->video cost, NOT glyph
+    drawing (which is RAM now). On hardware compare via the boot:
+    line's flush-ms figure.
+39. Limine shows its menu when limine.conf has >1 entry; timeout: 0
+    picks the first as default — entry order matters for the 'normal'
+    default.
 
 ## Verification commands
 ```

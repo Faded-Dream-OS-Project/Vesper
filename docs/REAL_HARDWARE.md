@@ -87,6 +87,35 @@ balenaEtcher:
 
 ## Booting the machine
 
+### Ventoy (tested, works)
+
+The first hardware run booted the image through **Ventoy**: copy
+`vesper.img` into the Ventoy USB stick's data partition, power on,
+open the Ventoy menu, and pick the image. Ventoy maps it as a virtual
+USB drive and the Limine menu below appears. This path is CONFIRMED
+working on real hardware (diagnostics, self-tests and panics all
+rendered); direct flash of `vesper.img` (below) also works.
+
+### The Vesper boot menu
+
+After the bootloader loads you get three entries (the first is the
+default; the menu appears when Limine has multiple entries):
+
+| Entry | What it is for |
+| --- | --- |
+| `Vesper (normal)` | Full boot: diagnostics, all self-tests, ring-3 init, ends on a green `=== Vesper boot complete ===` banner with a timing line, then idles. Use this by default. |
+| `Vesper (diagnostics hold)` | Stops right after the diagnostics block (`holding: diagnostics on screen, hlt.`) so the machine inventory can be photographed before anything else scrolls it away. |
+| `Vesper (quiet)` | No framebuffer rendering at all (serial only) - measures what the screen costs. The boot-time line still prints `console flushes took 0 ms`. |
+
+Hidden flags for debugging (add to the cmdline in limine.conf):
+`poison` (fill all free RAM with 0xA5 - uninitialized-memory
+detector), `syscall_trace` (one line per syscall - catches ring-3
+derailing), `panic_test` (end in the deliberate divide-by-zero panic
+to test the panic path), `guard_test` (stack-overflow panic test),
+`kbd_test_absent` / `timer_test_degraded` / `timer_force_fallbacks`
+(component-absence simulations), `kbd_test` (automated keyboard
+self-test).
+
 1. Insert the stick, power on.
 2. Open the firmware boot menu — usually a key at power-on: **F12,
    F11, F9, F8, Esc, Enter** (varies by vendor; some machines show
@@ -131,13 +160,19 @@ init: yield loop done, counter=5
 init: exit(0)
 user: fault_init finished (killed), tasks=1
 selftest: 3 passed, 0 failed -> ALL PASS
-Halting.
-```
 
-The screen **stays** on the final state (self-test results and
-`Halting.`) — it does not clear or reboot. That is the end of the
-demo: the kernel runs its self-tests, prints the results, and parks.
-Power off when done.
+=== Vesper boot complete ===
+boot: NNN ms total, console flushes took M ms (scale Nx, fb WxH, fb ok, PAT-WC yes)
+``
+
+The screen **stays** on the final state (the green boot-complete
+banner with the timing line) — it does not clear or reboot. That is
+the end of the demo: the kernel runs its self-tests, prints the
+results, and parks. Power off when done.
+
+Timing to report: the `boot:` line's total ms and the flush ms (the
+first hardware run took minutes with visible line-sweeping; the
+shadow-buffer console should bring the flush cost to tens of ms).
 
 Amber-colored lines (e.g. `kbd: not available`, timer degraded-mode
 warnings) are informational: the kernel continues without that
