@@ -8,9 +8,25 @@ Milestone status is updated as work is completed and verified.
 | 2 | GDT, IDT, exception handlers, panic register dump | done | QEMU q35 (BIOS+UEFI): deliberate divide-by-zero caught; full register dump + panic + stack trace on serial, then halt |
 | 3 | Physical memory manager, paging, kmalloc/kfree | done | QEMU q35 (BIOS+UEFI): self-tests on serial — pmm 6/6, vmm 7/7 (own PML4 active, map/unmap/write), heap 10/10 (incl. 64-alloc stress) ALL PASS |
 | 4 | Timer interrupts + keyboard driver | done | QEMU q35 (BIOS+UEFI): PIC remapped+masked, MADT parsed (LAPIC 0xFEE00000, IOAPIC 0xFEC00000), LAPIC timer calibrated vs PIT (1003.9 MHz bus, 100 Hz tick), timer self-test 4/4 (100 ms sleep -> ~10 ticks, EOI loop); PS/2 keyboard via IOAPIC GSI 1, automated QEMU-monitor sendkey harness (scripts/kbd_test.sh): 'key: h/i/H' + 'selftest: 5 passed, 0 failed -> ALL PASS' |
-| 5 | Scheduler with kernel threads + context switching | done | QEMU q35 (BIOS): 3 threads x 5 iterations interleaving a1 b1 c1 c2 a2 b2 ... 'counters: a=5 b=5 c=5', selftest 5/5 ALL PASS; context switch in sched_switch_to.S (prev, next) two-arg form |
-| 6 | Syscalls, user mode, minimal init | pending | |
+| 5 | Scheduler with kernel threads + context switching | done | QEMU q35 (BIOS+UEFI): PREEMPTIVE round robin — 3 threads that never yield, pure busy loops to 2,500,000 each, 'counters: a=2500000 b=2500000 c=2500000', selftest 5/5 ALL PASS; cooperative sched_yield kept; guard page below every thread stack (scripts/guard_test.sh: overflowing thread -> readable #PF with task name, halt, no silent corruption) |
+| 6 | Syscalls, user mode, minimal init | done | QEMU q35 (BIOS+UEFI): init runs in ring 3 — 'init: hello from ring 3', getpid()=4, uptime_ms()=670, write(bad ptr) -> errno 1 (no kernel fault), 5x yield loop, exit(0); fault_init executes hlt in ring 3 -> only that process killed, kernel keeps ticking; selftest 3/3 ALL PASS; ABI documented in docs/SYSCALLS.md |
 | 7 | Bootable USB image, safe fallbacks, flash/boot docs | pending (image groundwork done: `make img` GPT+FAT32 ESP boots OVMF+SeaBIOS) | |
+
+Session-4 shortcut paydown (all verified):
+- Preemptive scheduling root-caused and fixed: the switched-in task
+  entered via `ret` (nothing restored IF — it could never be preempted
+  again, one activation each) AND the LAPIC timer vector stayed
+  in-service because the EOI only ran on the interrupted task's own
+  return path. Fix: `sti` in sched_switch_to between the RSP store and
+  load + EOI before preemption. Preemption now fires at the outermost
+  interrupt level (nesting-safe).
+- Keyboard self-test gated behind the `kbd_test` kernel cmdline flag
+  (limine.conf; scripts/kbd_test.sh sets it). Normal boots print
+  'kbd: skipped' and stay all-green.
+- RWX linker warning gone: LOAD segments split R+X / R / R+W,
+  page-aligned, warning-free link on BIOS and UEFI.
+- Guard page below each kernel thread stack + IST_PF stack for #PF
+  (stack exhaustion cannot escalate to #DF); scripts/guard_test.sh.
 
 Infrastructure:
 - `main` is the sole branch (dev merged + deleted in session 3).
