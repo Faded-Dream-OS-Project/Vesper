@@ -9,6 +9,7 @@
 #include <idt.h>
 #include <lib.h>
 #include <acpi.h>
+#include <cpu.h>
 #include <apic.h>
 #include <irq.h>
 #include <kbd.h>
@@ -176,6 +177,10 @@ int cmdline_has(const char *flag)
 
 void kmain(void)
 {
+    /* Real-firmware CR0/CR4 hygiene BEFORE anything else: SMEP/SMAP
+       and emulation bits differ wildly across vendors (session 6). */
+    cpu_sanitize();
+
     serial_init();
 
     struct limine_framebuffer_response *fb_response =
@@ -225,6 +230,8 @@ void kmain(void)
     kprintf("PIC remapped (0x20-0x2F) and fully masked.\n");
 
     /* ---- Milestone 3 ---- */
+    if (cmdline_has("poison"))
+        pmm_set_poison(1);
     pmm_init(mm, hhdm_request.response->offset);
     kprintf("PMM: %lu/%lu frames free (%lu MiB RAM tracked)\n",
             pmm_free_frames(), pmm_total_usable_frames(),

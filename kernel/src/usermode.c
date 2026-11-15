@@ -161,6 +161,17 @@ static u64 sys_uptime(void)
 
 u64 syscall_c_entry(struct syscall_frame *f)
 {
+    /* 'syscall_trace' cmdline flag (session 6): one line per syscall —
+       the hardware boot derailed ring 3 somewhere between syscall
+       entry and sysret; this catches it if it happens again. */
+    static int traced;
+    if (cmdline_has("syscall_trace") && traced < 200) {
+        traced++;
+        kprintf("  sys[%lu] rip=%#lx rsp=%#lx nr=%lu\n",
+                (unsigned long)sched_current()->pid,
+                (unsigned long)f->rcx, (unsigned long)f->user_rsp,
+                (unsigned long)f->nr);
+    }
     switch (f->nr) {
     case SYS_WRITE:  f->nr = sys_write(f);  break;
     case SYS_EXIT:   f->nr = sys_exit(f);   break;   /* nr = sentinel */

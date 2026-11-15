@@ -58,6 +58,20 @@ void bootinfo_print(void)
     cpu_flags_str(&cpu, flags, sizeof(flags));
     kprintf("CPUID flags: %s\n", flags[0] ? flags : "(none reported)");
 
+    /* Control registers (post-sanitize; boot_cr4 is the pre state). */
+    {
+        u64 cr4 = read_cr4();
+        kprintf("CR0=%#lx CR4=%#lx EFER=%#lx\n",
+                (unsigned long)boot_cr0, (unsigned long)cr4,
+                (unsigned long)boot_efer);
+        kprintf("CR4: SMEP=%lu SMAP=%lu NXE=%lu OSFXSR=%lu%s\n",
+                (unsigned long)((cr4 >> 20) & 1),
+                (unsigned long)((cr4 >> 21) & 1),
+                (unsigned long)((boot_efer >> 11) & 1),
+                (unsigned long)((cr4 >> 9) & 1),
+                cr4_changed ? " (cleared SMEP/SMAP at boot)" : "");
+    }
+
     /* Memory map */
     {
         struct limine_memmap_response *mm = memmap_request.response;

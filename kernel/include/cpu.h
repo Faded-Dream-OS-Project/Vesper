@@ -26,5 +26,10 @@ struct cpu_info {
 };
 
 void cpu_identify(struct cpu_info *c);
+void cpu_sanitize(void);     /* early CR0/CR4 cleanup for real firmware */
+
+/* boot-time control register snapshots (for the diagnostics print) */
+extern u64 boot_cr0, boot_cr4, boot_efer;
+extern int cr4_changed;      /* 1 = SMEP/SMAP/etc had to be cleared */
 
 #endif /* VESPER_CPU_H */

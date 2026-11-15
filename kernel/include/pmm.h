@@ -26,6 +26,8 @@ u64  pmm_alloc(void);          /* returns physical address, 0 on failure */
 void pmm_free(u64 paddr);
 void pmm_mark_busy(u64 paddr);  /* remove one frame from the free pool */
 u64  pmm_free_frames(void);
+void pmm_set_poison(int on);   /* 'poison' cmdline: 0xA5-fill free frames */
+int  pmm_poisoned(void);
 u64  pmm_total_usable_frames(void);
 
 #endif /* VESPER_PMM_H */

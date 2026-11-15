@@ -18,7 +18,7 @@ mkdir -p build
 build_one() {
     local src=$1 prefix=$2
     $CC -std=c17 -Wall -Wextra -ffreestanding -nostdlib -fno-stack-protector \
-        -fno-pic -fno-pie -mno-red-zone -mno-sse -mno-mmx -mno-3dnow \
+        -fno-pic -fno-pie -mno-red-zone -mgeneral-regs-only \
         -mcmodel=small -O2 -m64 -c "$src" -o "build/${prefix}_user.o"
 
     ld -m elf_x86_64 -T user/init.ld -nostdlib -static \

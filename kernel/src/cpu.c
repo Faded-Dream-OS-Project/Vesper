@@ -7,8 +7,39 @@
 #include <cpu.h>
 #include <lib.h>
 
-/* CPUID discovery for the boot diagnostics screen (session 5).
-   Nothing here is fatal: missing leaves leave their fields zero. */
+/* CPUID discovery for the boot diagnostics screen (session 5) plus
+   early control-register sanitisation for real hardware (session 6):
+   firmware may leave SMEP/SMAP set (we access user memory from ring 0
+   in sys_write — SMAP would fault those accesses) or leave legacy
+   emulation bits in CR0. Print what we found and what we changed. */
+
+u64 boot_cr0, boot_cr4, boot_efer;
+int cr4_changed;
+
+void cpu_sanitize(void)
+{
+    boot_cr0 = read_cr0();
+    boot_cr4 = read_cr4();
+    boot_efer = read_msr(0xC0000080u);
+
+    /* CR0: clear emulation (EM) so FPU instructions work if user code
+       ever uses them; keep everything else firmware chose (WP, PG,
+       PE, NE...). */
+    u64 cr0 = boot_cr0 & ~(1ull << 2);           /* EM=0 */
+    __asm__ volatile ("mov %0, %%cr0" : : "r"(cr0) : "memory");
+
+    /* CR4: clear SMEP (bit 20) / SMAP (bit 21) — the kernel reads and
+       writes user buffers from ring 0. Keep OSFXSR/OSXMMEXCPT (bit
+       9/10) as firmware set them; set them if absent so SSE state is
+       usable. Also clear PGE? no — keep. */
+    u64 cr4 = boot_cr4 & ~((1ull << 20) | (1ull << 21));
+    cr4 |= (1ull << 9) | (1ull << 10);           /* OSFXSR, OSXMMEXCPT */
+    cr4_changed = (cr4 != boot_cr4);
+    write_cr4(cr4);
+
+    /* EFER.NXE is enabled by usermode_init later; nothing to do here.
+       Cache the post state for the diagnostics print. */
+}
 
 void cpu_identify(struct cpu_info *c)
 {

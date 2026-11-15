@@ -18,6 +18,23 @@ static u64 hhdm;               /* offset to convert phys -> virt */
 static u64 free_count;
 static u64 total_usable;
 
+/* 'poison' cmdline flag (session 6): fill every free frame with 0xA5
+   at init and on free, so the kernel runs on RAM that looks like real
+   hardware (QEMU zero-fills; real machines do not). Any use of
+   uninitialized memory shows up immediately. */
+static int poison;
+void pmm_set_poison(int on) { poison = on; }
+int  pmm_poisoned(void)      { return poison; }
+
+static void poison_frame(u64 paddr)
+{
+    if (!poison)
+        return;
+    u64 *p = (u64 *)(hhdm + paddr);
+    for (u64 i = 0; i < PMM_FRAME_SIZE / 8; i++)
+        p[i] = 0xA5A5A5A5A5A5A5A5ull;
+}
+
 /* ---- bitmap helpers ---- */
 
 static inline void bm_set(u64 frame)
@@ -83,6 +100,7 @@ void pmm_init(struct limine_memmap_response *memmap, u64 hhdm_offset)
             if (bm_test(frame)) {
                 bm_clear(frame);
                 free_count++;
+                poison_frame(p);
             }
             total_usable++;
         }
@@ -110,6 +128,7 @@ void pmm_free(u64 paddr)
         return;
     bm_clear(frame);
     free_count++;
+    poison_frame(paddr);
 }
 
 void pmm_mark_busy(u64 paddr)

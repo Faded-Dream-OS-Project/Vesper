@@ -136,6 +136,7 @@ int task_add_user_pages(int slot, u64 vaddr, u64 pages)
         u64 p = pmm_alloc();
         if (p == 0)
             return -1;
+        memset((void *)vmm_phys_to_hhdm(p), 0, VMM_PAGE_SIZE);
         if (vmm_map_table(t->pml4, vaddr + i * VMM_PAGE_SIZE,
                           p, VMM_WRITABLE | VMM_USER) != 0)
             return -1;
@@ -186,12 +187,16 @@ int task_new_user(const char *name, u64 entry, u64 user_rsp,
             return -1;
     }
 
-    /* 4) stack pages (rw, user), fresh zero frames */
+    /* 4) stack pages (rw, user) — explicitly zeroed: QEMU hands out
+       pre-zeroed frames so a missing memset hid for months, but real
+       RAM keeps whatever the firmware left there (session 6: the
+       hardware boot faulted in user mode). */
     u64 spages = USER_STACK_SIZE / VMM_PAGE_SIZE;
     for (u64 i = 0; i < spages; i++) {
         u64 p = pmm_alloc();
         if (p == 0)
             return -1;
+        memset((void *)vmm_phys_to_hhdm(p), 0, VMM_PAGE_SIZE);
         if (vmm_map_table(t->pml4, USER_STACK_BASE + i * VMM_PAGE_SIZE,
                           p, VMM_WRITABLE | VMM_USER) != 0)
             return -1;
