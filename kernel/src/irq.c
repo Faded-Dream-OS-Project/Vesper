@@ -31,10 +31,13 @@ void timer_irq(struct int_frame *frame)
 {
     (void)frame;
     timer_tick();
-    sched_note_tick();
-    /* NOTE: switching from inside the IRQ livelocks under QEMU TCG
-       (verified experimentally); the scheduler yields from thread
-       context instead — see sched_note_tick(). */
+    /* EOI FIRST: the timer vector leaves service so the next tick can
+       reach whichever task runs next; the generic end-of-dispatch EOI
+       in irq_dispatch would only fire on the interrupted task's own
+       return path — far too late (that was half of the preemption
+       livelock). */
+    apic_eoi();
+    sched_tick();
 }
 
 /* PS/2 keyboard entry point (vector 0x21). */

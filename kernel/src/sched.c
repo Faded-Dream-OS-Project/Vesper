@@ -137,18 +137,18 @@ void sched_yield(void)
     switch_to(next);
 }
 
-/* Called from the timer IRQ: record that a tick arrived so yielding
-   tasks (in thread context, not IRQ context) can round-robin. */
-static volatile u64 tick_seq;
-
-void sched_note_tick(void)
+/* Called from the timer IRQ after the EOI: preempt the current task
+   in favour of the next one (round robin). The context switch
+   re-enables interrupts on the way in (sched_switch_to sti), so the
+   switched-in task is preemptible even though it enters via `ret`
+   rather than iretq — and a preempted task later resumes its own
+   interrupt chain, whose iretq restores its saved RFLAGS. */
+void sched_tick(void)
 {
-    tick_seq++;
-}
-
-u64 sched_tick_seq(void)
-{
-    return tick_seq;
+    if (ready_count > 1) {
+        struct task *next = pick_next(current);
+        switch_to(next);
+    }
 }
 
 

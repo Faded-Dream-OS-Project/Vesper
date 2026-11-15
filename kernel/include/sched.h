@@ -8,9 +8,10 @@
 
 #include <common.h>
 
-/* Kernel threads and a round-robin scheduler driven by the timer
-   tick. Context switching happens in sched_switch_to.S (plain C
-   cannot reload RSP/RIP atomically). */
+/* Kernel threads and a round-robin PREEMPTIVE scheduler driven by
+   the timer tick; sched_yield() remains for cooperative switching.
+   Context switching happens in sched_switch_to.S (plain C cannot
+   reload RSP/RIP atomically). */
 
 typedef void (*kthread_fn_t)(void *arg);
 
@@ -33,8 +34,7 @@ void sched_init(void);
 int  kthread_create(const char *name, kthread_fn_t fn, void *arg);
 void kthread_exit(void);     /* marks current task finished, yields */
 void sched_yield(void);      /* cooperative switch */
-void sched_note_tick(void);  /* timer IRQ records a tick */
-u64  sched_tick_seq(void);
+void sched_tick(void);       /* timer IRQ preempts (after EOI) */
 struct task *sched_current(void);
 u64  sched_task_count(void);
 
