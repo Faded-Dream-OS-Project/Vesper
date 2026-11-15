@@ -8,6 +8,8 @@
 
 #include <common.h>
 
+struct limine_executable_address_response;
+
 /* Virtual memory manager: 4-level x86_64 paging.
 
    - Limine's higher-half direct map (HHDM) stays as the bootloader

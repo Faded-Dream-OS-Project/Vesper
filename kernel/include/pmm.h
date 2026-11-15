@@ -8,6 +8,8 @@
 
 #include <common.h>
 
+struct limine_memmap_response;
+
 /* Physical memory manager.
    A single bitmap over the whole physical address space. Frames that
    fall inside USABLE memory-map regions are free unless allocated;

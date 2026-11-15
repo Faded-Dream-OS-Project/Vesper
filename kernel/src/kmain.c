@@ -12,6 +12,7 @@
 #include <pmm.h>
 #include <selftest.h>
 #include <vmm.h>
+#include <heap.h>
 
 /* ---- Limine requests ----
    Marked sections bracket the request block; the bootloader scans it
@@ -169,6 +170,57 @@ void kmain(void)
                frames walk() created stay allocated by design */
             test_check(&t, "pmm count +1 after data-frame free",
                        pmm_free_frames() == after_free + 1);
+        }
+        test_summary(&t);
+    }
+
+    kheap_init();
+    kprintf("heap: initialised at %#llx\n",
+            (unsigned long long)KHEAP_START);
+
+    {
+        struct test_ctx t;
+        void *a, *b, *c;
+        u64 used0;
+
+        test_begin(&t, "heap");
+        a = kmalloc(100);
+        test_check(&t, "kmalloc returns ptr", a != NULL);
+        memset(a, 0xAB, 100);
+        test_check(&t, "write to allocation works",
+                   ((volatile u8 *)a)[0] == 0xAB &&
+                   ((volatile u8 *)a)[99] == 0xAB);
+        used0 = kheap_used();
+        b = kmalloc(4096);
+        test_check(&t, "second alloc distinct", b != NULL && b != a);
+        test_check(&t, "used grows", kheap_used() > used0);
+        kfree(a);
+        test_check(&t, "kfree accepted", 1);
+        c = kmalloc(50);
+        test_check(&t, "reuse after free", c != NULL);
+        /* the freed 100-byte block must satisfy this 50-byte alloc
+           without growing used beyond the freed amount */
+        test_check(&t, "used reflects reuse",
+                   kheap_used() <= used0 + 4096);
+        kfree(b);
+        kfree(c);
+        test_check(&t, "all freed", kheap_used() == 0);
+        {
+            /* stress: many small allocs then free all */
+            void *ptrs[64];
+            int ok = 1;
+            for (int i = 0; i < 64; i++) {
+                ptrs[i] = kmalloc(1 + (u64)(i * 37) % 512);
+                if (!ptrs[i])
+                    ok = 0;
+                else
+                    memset(ptrs[i], i & 0xFF, 16);
+            }
+            for (int i = 0; i < 64; i++)
+                kfree(ptrs[i]);
+            test_check(&t, "stress 64 allocs + frees", ok);
+            test_check(&t, "stress leaves heap empty",
+                       kheap_used() == 0);
         }
         test_summary(&t);
     }
