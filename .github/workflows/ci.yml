@@ -1,0 +1,59 @@
+name: ci
+
+# Vesper CI: build the kernel + ISO, boot it headless in QEMU (TCG)
+# under both BIOS and OVMF/UEFI, assert all suites PASS on serial.
+# Copyright (c) Faded Dream OS Project. All rights reserved.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-boot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential gcc python3 xorriso mtools qemu-system-x86 ovmf
+
+      - name: Environment check
+        run: bash scripts/doctor.sh || true
+
+      - name: Build kernel and ISO
+        run: |
+          make clean >/dev/null 2>&1 || true
+          make iso
+
+      - name: Boot UEFI (OVMF) and assert suites
+        run: |
+          cp /usr/share/OVMF/OVMF_VARS_4M.fd build/OVMF_VARS.fd
+          timeout 120 qemu-system-x86_64 -machine q35 -m 512M \
+            -drive if=pflash,format=raw,file=/usr/share/OVMF/OVMF_CODE_4M.fd,readonly=on \
+            -drive if=pflash,format=raw,file=build/OVMF_VARS.fd \
+            -cdrom vesper.iso -serial file:build/serial_uefi.log \
+            -display none -no-reboot || test $? -eq 124
+          cat build/serial_uefi.log | tr -c '[:print:]\n' ' ' | tail -n 40
+          grep -aq "suites: 6 pass, 0 fail, 0 not run -> ALL PASS" build/serial_uefi.log
+          grep -aq "=== Vesper boot complete ===" build/serial_uefi.log
+
+      - name: Boot BIOS (SeaBIOS) and assert suites
+        run: |
+          timeout 120 qemu-system-x86_64 -machine q35 -m 512M \
+            -cdrom vesper.iso -serial file:build/serial_bios.log \
+            -display none -no-reboot || test $? -eq 124
+          cat build/serial_bios.log | tr -c '[:print:]\n' ' ' | tail -n 40
+          grep -aq "suites: 6 pass, 0 fail, 0 not run -> ALL PASS" build/serial_bios.log
+          grep -aq "=== Vesper boot complete ===" build/serial_bios.log
+
+      - name: Upload ISO and logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: vesper-boot-artifacts
+          path: |
+            vesper.iso
+            build/serial_uefi.log
+            build/serial_bios.log

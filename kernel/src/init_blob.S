@@ -10,17 +10,17 @@
 .align 16
 .global init_blob
 init_blob:
-.incbin "build/init.bin"
+.incbin "/home/z/my-project/lucid/build/lucid_test.bin"
 .align 8
 .global init_blob_size
 init_blob_size:
-.quad 776
+.quad 1234
 .global init_blob_entry
 init_blob_entry:
-.quad 0x4000c0
+.quad 0x400000
 .global init_blob_span
 init_blob_span:
-.quad 0x0000000000400310
+.quad 0x4004d2
 .section .rodata
 .align 16
 .global fault_init_blob
@@ -35,4 +35,4 @@ fault_init_blob_entry:
 .quad 0x400000
 .global fault_init_blob_span
 fault_init_blob_span:
-.quad 0x0000000000400038
+.quad 0x400038

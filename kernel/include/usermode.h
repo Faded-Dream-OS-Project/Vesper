@@ -60,6 +60,7 @@ void usermode_launch_init(void);
 void usermode_launch_fault_init(void);
 void user_cap_reset(void);       /* clear the user-output capture ring */
 int  user_cap_contains(const char *needle);   /* substring search */
+u32  user_cap_len(void);                    /* captured output bytes */
 
 /* User-mode exception (any #PF/#GP from CPL=3): kill the process with
    a readable message; the kernel keeps running. */

@@ -26,30 +26,37 @@ build_one() {
 
     objcopy -O binary "build/${prefix}.elf" "build/${prefix}.bin"
 
-    local SIZE ENTRY SPAN
-    SIZE=$(stat -c%s "build/${prefix}.bin")
-    ENTRY=$(readelf -hW "build/${prefix}.elf" | awk '/Entry point/ {print $4}')
-    SPAN=$(nm "build/${prefix}.elf" | awk '$3=="_end"{print "0x"$1}')
+    emit_blob "build/${prefix}.bin" "$prefix"
+}
+
+# Emit the rodata blob descriptors for an EXISTING flat binary
+# (INIT_BIN path): entry is 0x400000 and span is size+0x400000 per
+# the init.ld layout contract.
+emit_blob() {
+    local bin=${1:?bin} prefix=${2:?prefix} entry=${3:-0x400000}
+    local SIZE SPAN
+    SIZE=$(stat -c%s "$bin")
+    SPAN=$(printf '0x%x' $(( SIZE + 0x400000 )))
 
     {
         printf '.section .rodata\n'
         printf '.align 16\n'
         printf '.global %s_blob\n' "$prefix"
         printf '%s_blob:\n' "$prefix"
-        printf '.incbin "build/%s.bin"\n' "$prefix"
+        printf '.incbin "%s"\n' "$bin"
         printf '.align 8\n'
         printf '.global %s_blob_size\n' "$prefix"
         printf '%s_blob_size:\n' "$prefix"
         printf '.quad %s\n' "$SIZE"
         printf '.global %s_blob_entry\n' "$prefix"
         printf '%s_blob_entry:\n' "$prefix"
-        printf '.quad %s\n' "$ENTRY"
+        printf '.quad %s\n' "$entry"
         printf '.global %s_blob_span\n' "$prefix"
         printf '%s_blob_span:\n' "$prefix"
         printf '.quad %s\n' "$SPAN"
     } >> kernel/src/init_blob.S
 
-    echo "${prefix}: build/${prefix}.bin ($SIZE bytes) entry $ENTRY span $SPAN"
+    echo "${prefix}: $bin ($SIZE bytes) entry $entry span $SPAN"
 }
 
 rm -f kernel/src/init_blob.S
@@ -61,5 +68,13 @@ rm -f kernel/src/init_blob.S
     printf '# Flat binaries of the user programs, entry at 0x400000.\n\n'
 } > kernel/src/init_blob.S
 
-build_one user/init.c init
+if [ -n "${INIT_BIN:-}" ]; then
+    # External init (e.g. Lucid): embed the given flat binary as init.
+    # Must be linked at 0x400000 with _end = 0x400000+size (init.ld
+    # contract; the Makefile's INIT_BIN flow asserts this in lucid_test.sh).
+    [ -f "$INIT_BIN" ] || { echo "INIT_BIN not found: $INIT_BIN" >&2; exit 1; }
+    emit_blob "$INIT_BIN" init
+else
+    build_one user/init.c init
+fi
 build_one user/fault_init.c fault_init
