@@ -639,9 +639,11 @@ void kmain(void)
         __asm__ volatile ("divq %2" : "+a"(num) : "d"(num), "m"(denom));
     }
 
-    /* Normal end of boot: green banner, timing summary, then sleep. */
+    /* Normal end of boot: strict per-suite summary, green banner,
+       timing summary, then sleep. */
     breadcrumb_stage(15);   /* done */
     kprintf("\n");
+    test_strict_summary();   /* every suite: PASS / FAIL / NOT RUN */
     kprintf("$P=== Vesper boot complete ===$T\n");
     kprintf("boot: %lu ms total, console flushes took %lu ms "
             "(scale %lux, fb %lux%lu, %s, PAT-WC %s)\n",
