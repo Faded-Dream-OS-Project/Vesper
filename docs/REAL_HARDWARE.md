@@ -4,13 +4,16 @@ This guide is for the human who flashes Vesper onto a USB stick and
 boots it on a real PC. Everything the kernel needs to tell you is on
 screen — no serial port, no keyboard required.
 
-Status of the current image (session 7): **not yet tested on real
-hardware**. The session-6 image failed there (black screen after
-Limine); the session-7 kernel fixes four concrete boot hazards found
-in that code (see `docs/HANDOFF.md`), and every boot now identifies
-itself with a build-ID line and shows coloured breadcrumb squares
-while the init stages run. If the screen is black, you can still tell
-how far boot got — see "Black-screen photography" below.
+Status of the current image (session 8, commit 6140cbb): the
+session-7 black-screen hazards are fixed AND the ring-3 #GP(0x28)
+crash you photographed is root-caused and fixed (SYSRET was running
+user code through a DPL-0 descriptor kept "for Limine"; the GDT is
+now fully owned with real user descriptors — see docs/HANDOFF.md).
+Verified in QEMU on BIOS and UEFI (6/6 suites); the hardware fix
+itself is NOT yet verified — that is exactly what the next boot
+tests. If anything faults now, the kernel prints the decoded error
+code, the full GDT dump and the failing registers: photograph the
+whole screen.
 
 ## Reading a black screen (session 7)
 

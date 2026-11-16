@@ -1,3 +1,69 @@
+# Vesper — development handoff (2026-11-16, session 8)
+
+State: the real-hardware #GP crash (i5-8400 photo) is root-caused,
+fixed and pushed; all QEMU checks green. Phase 1 of the three-phase
+session (crash fix) is COMPLETE; Phase 2 (Lucid init) and Phase 3
+(Dusk coreutils) are separate repos worked after this one.
+
+THE CRASH (photo: #GP err=0x28, kernel RIP in an IRQ-stub prologue,
+iret frame cs=0x2b/ss=0x23, right after init printed its first
+lines):
+
+Root cause (disassembly + descriptor analysis + syscall_trace):
+  - SYSRET loads CS = STAR[63:48]+16 and SS = STAR[63:48]+8, RPL 3.
+    usermode.c programs STAR[63:48] = 0x18, so EVERY return to ring 3
+    ran through CS=0x2b / SS=0x23 — through the descriptors at
+    selectors 0x28/0x20.
+  - GDT[5] (0x28) was the "Limine compat" descriptor with DPL=0 —
+    NOT a user descriptor. Coffee Lake rejects that SYSRET CS load
+    with #GP err=0x28 (the error code names selector 0x28 exactly).
+    QEMU's TCG accepts it, which is why 6/6 suites passed in QEMU
+    while the real machine died (cpu_matrix.sh: qemu64..EPYC, only
+    the deliberate fault-test #GP appears).
+  - Why early syscalls "worked": they didn't differ — every sysret
+    used the same bad descriptor; the photo RIP 0x40012c is the
+    write() AFTER getpid (syscall_trace confirms the address), the
+    first one where the timer/irq path interleaved. Root cause is
+    the descriptor, not the syscall sequence.
+
+Fix (commit a5b5bae, verified in QEMU BIOS+UEFI, 6/6 suites, NOT
+hardware-tested):
+  - Vesper owns the whole GDT; compat entries gone. 0x28 is now a
+    REAL user code64 (DPL3, L=1, A=1); 0x30 user data DPL3.
+  - gdt_flush far-returns onto SEL_KCODE and RELOADS SS (the kernel
+    can arrive with Limine's SS=0x30; a kernel push through a DPL3
+    SS is #GP — that exact shape reproduced in QEMU when SS was
+    missed, confirming the mechanism).
+  - Accessed bit pre-set in every descriptor (no descriptor load
+    ever writes the GDT).
+  - gdt_dump() on the diagnostics screen and in #GP/#SS/#NP
+    handlers + selector error-code decode (EXT/IDT/TI/index).
+  - lar/lsl verification of all 7 selectors at boot (all OK).
+  - syscall_entry.S validates the ring-3 return frame (canonical
+    RIP, RFLAGS bit1 + reserved bits, user-half RSP) before sysretq,
+    panicking with the failing FIELD named. Two of my own bugs were
+    caught and fixed in-session: the validation call must save
+    rcx/r11 (caller-saved, and exactly what sysretq loads) and rax
+    (syscall result) — the intermediate versions crashed init in
+    QEMU with sysret RIP=0x800000000000 / bogus getpid values.
+
+Strict testing (commit 6140cbb): boot ends with a per-suite summary
+table (PASS/FAIL/NOT RUN + 'suites: N pass...'); panic() closes the
+open suite as FAIL and names it. cpu_matrix.sh runs the QEMU CPU
+model hunt (-d int): no model reproduces the hardware #GP.
+
+Hardware test pack (download/): vesper-6140cbb.iso/.img + SHA256SUMS
+(+ generic vesper.img), s8_final_uefi.log / s8_final_bios.log.
+Photo guide for the next hardware run is in docs/REAL_HARDWARE.md.
+
+If it STILL #GPs on metal: the panic now prints the decoded error
+code, the full GDT dump, and the failing register state — photograph
+the whole screen; with err=0x2b/0x23-class values the story moves to
+the SS/CS DPL check on that machine and the table above shows what
+the CPU sees.
+
+---
+
 # Vesper — development handoff (2026-11-15, session 7)
 
 State: all five session-6 commits pushed (remote==local, confirmed
